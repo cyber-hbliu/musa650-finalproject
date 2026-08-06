@@ -154,6 +154,20 @@ const SCENES = [
         " question that matters — does what the satellite calls decay line up with where"+
         " Philadelphia records blight, in 311 calls and demolition permits?"]},
 
+ {id:"unet", type:"infographic", art:"unet",
+  title:"The model: a U-Net for per-pixel change",
+  body:["A convolutional network learns by supervision: it is shown 128-pixel patches of"+
+        " the 18-channel image stack beside the NLCD-derived label for every pixel, and"+
+        " tunes its filters until its output map reproduces those labels. Filters read"+
+        " texture and context — a block, not a lone pixel — which is the argument for a"+
+        " CNN over per-pixel spectral rules.",
+        "The U-Net shape exists because the answer must itself be a map. An encoder"+
+        " compresses each patch into context (32 → 64 → 128 channels), a decoder expands"+
+        " back to full resolution, and skip connections carry fine detail past the"+
+        " bottleneck. Change is rare — under 1% of pixels — so the loss upweights it,"+
+        " <b>18.6×</b> for new development and <b>10.2×</b> for decay, and training never"+
+        " touches the held-out checkerboard blocks."]},
+
  {id:"area", type:"chart", chart:"area",
   title:"Detected change area by city and class",
   body:["Detected change, city by city. Decay dwarfs new development everywhere — roughly"+
@@ -170,44 +184,62 @@ const SCENES = [
 
  {id:"detroit", type:"map", city:"Detroit", layers:["detected|decay","detected|new development"],
   title:"Model transfer to Detroit",
-  body:["Applied to Detroit without a single epoch of retraining: <b>18.5 km²</b> of decay"+
-        " against 0.6 of new development.",
-        "Thirty-to-one is what a shrinking city looks like from orbit."]},
+  body:["With frozen Philadelphia weights and per-city channel standardisation, the network"+
+        " flags <b>18.49 km²</b> of decay in Detroit against <b>0.59 km²</b> of new"+
+        " development — a 31 : 1 ratio, where Philadelphia's is 6.4 : 1.",
+        "The direction matches the underlying record: over the decade, NLCD intensity loss"+
+        " marks <b>11,211</b> Detroit pixels as decay against only <b>103</b> as new"+
+        " development, by far the strongest decay signal of the three cities."]},
 
  {id:"atlanta", type:"map", city:"Atlanta", layers:["detected|decay","detected|new development"],
   title:"Model transfer to Atlanta",
-  body:["<b>10.2 km²</b> of decay, 0.24 of new development. Atlanta is booming — in Cobb,"+
-        " Gwinnett and Forsyth, beyond the city line this study never crosses.",
-        "Inside the boundary, growth means scattered infill, and it is named accordingly."]},
+  body:["The same frozen network flags <b>10.19 km²</b> of decay and <b>0.24 km²</b> of new"+
+        " development in Atlanta. The region's growth is real but lies in Cobb, Gwinnett"+
+        " and Forsyth counties, beyond the municipal boundary this study never crosses;"+
+        " inside it, new development means scattered infill.",
+        "The label record is far more balanced — <b>6,124</b> decay pixels against"+
+        " <b>3,010</b> of new development — indicating the transferred model under-detects"+
+        " Atlanta's infill rather than Atlanta lacking it."]},
 
  {id:"trajectory", type:"chart", chart:"trajectory",
   title:"Developed-intensity trajectory, 2015–2025",
-  body:["Developed area barely moves anywhere — at most a percent over ten years. All three"+
-        " are built out, so <b>intensity</b> is the real signal.",
-        "Following 2015's developed pixels, Detroit loses 0.024 of a class step while"+
-        " Philadelphia and Atlanta edge up. The decline runs to 2022, then flattens."]},
+  body:["Each year's NLCD land cover is reduced to a development-intensity rank — open"+
+        " space 1, low 2, medium 3, high 4. The pixels developed in 2015 are fixed as a"+
+        " reference mask, and the mean rank over that same mask is recomputed for every"+
+        " year to 2025. The curve therefore tracks how the 2015 built fabric changed,"+
+        " not where the city grew.",
+        "Developed area itself is static — +0.4% in Philadelphia, +0.1% in Detroit,"+
+        " +1.1% in Atlanta over the decade. On the fixed mask, Detroit's mean intensity"+
+        " falls <b>0.024</b> rank steps, declining monotonically to 2022 and then"+
+        " flattening, while Philadelphia (+0.002) and Atlanta (+0.004) drift marginally"+
+        " upward. Hover any point for the yearly values."]},
 
  {id:"observed", type:"map", city:"Philadelphia", layers:["observed|decay","observed|new development"],
   title:"Observed labels on held-out blocks",
   body:["Train and test patches come from a 256-pixel checkerboard, so no test block shares"+
         " an edge with a training block. Skip that and a 30-metre raster will happily report"+
         " skill that isn't there.",
-        "These are the true labels on held-out ground."]},
+        "Citywide, the labels count 1,426 pixels of new development against 4,424 of"+
+        " decay; these are the true labels on the held-out ground."]},
 
  {id:"detected", type:"map", city:"Philadelphia",
   layers:["detectedholdout|decay","detectedholdout|new development"],
   reference:["observed|decay","observed|new development"],
   title:"Prediction against truth, held-out blocks",
-  body:["Grey is the truth from the previous map; gold and green are what the model predicted"+
-        " on the same blocks. Where the two coincide, the model was right.",
-        "It finds the big clusters in the south and along the northeast riverfront and misses"+
-        " most of the rest. Precision on decay is <b>0.09</b> at a recall of 0.12 — nine of"+
-        " ten flagged pixels are wrong. Stated, not buried."]},
+  body:["Grey polygons are the observed labels on the held-out blocks; gold and green are"+
+        " the model's predictions on the same blocks, so agreement and disagreement are"+
+        " visible in a single frame.",
+        "The model recovers the larger contiguous clusters — South Philadelphia and the"+
+        " northeast riverfront — and misses dispersed, single-parcel change. At the"+
+        " operating threshold, decay precision is <b>0.09</b> at recall 0.12; most flagged"+
+        " pixels are false positives, and they concentrate around true clusters rather"+
+        " than scattering at random."]},
 
  {id:"ap", type:"chart", chart:"ap",
   title:"Average precision vs. spectral baseline",
-  body:["The null model is a plain change in the vegetation index. If the network can't"+
-        " clear that bar, the convnet is decoration.",
+  body:["The null model ranks developed pixels by their change in NDVI between 2015 and"+
+        " 2025 — computable without any training, it sets the floor a learned model must"+
+        " clear.",
         "On decay it wins in Philadelphia (<b>0.061</b> vs 0.026) and Detroit (0.034 vs"+
         " 0.022), and loses Atlanta by a hair. On new development the null wins everywhere —"+
         " which is why new development is reported, not modelled."]},
@@ -254,6 +286,18 @@ const SCENES = [
         " recomputed at six cell sizes, 90 metres to 2.4 kilometres.",
         "The sign never flips, and controlling for built area never rescues it."]},
 
+ {id:"hotspots", type:"map", city:"Philadelphia", layers:["detected|decay"], bg:true,
+  title:"Decay hotspots by block group",
+  body:["Joined to <b>1,337</b> census block groups, the four largest detected hotspots"+
+        " measure 0.47, 0.43, 0.31 and 0.25 km², in tracts 035702, 980906 and 980901."+
+        " The 9809-series are special-use tracts — the industrial and airport belt, with"+
+        " almost no resident population.",
+        "Their census profile confirms it: against eight ACS measures the strongest"+
+        " correlation is median year built at <b>+0.14</b> (+0.05 partial); income"+
+        " (+0.09), poverty (−0.07) and vacancy (−0.07) are indistinguishable from zero."+
+        " The satellite's hotspots are not distressed neighbourhoods.",
+        "Zoom in and hover any block group for its profile."]},
+
  {id:"why", type:"infographic", art:"pixel",
   title:"Interpretation: change below pixel scale",
   body:["A Philadelphia rowhouse is four to five metres wide — about a tenth of a 30-metre"+
@@ -291,9 +335,10 @@ Promise.all([
   d3.json("data/boundaries.geojson"),
   d3.json("data/roads.geojson"),
   d3.json("data/tracts.geojson"),
+  d3.json("data/blockgroups.geojson"),
   d3.json("data/stats.json")
-]).then(([bounds, roads, tracts, stats]) => {
-  DATA = {bounds, roads, tracts, stats, vec:{}};
+]).then(([bounds, roads, tracts, blockgroups, stats]) => {
+  DATA = {bounds, roads, tracts, blockgroups, stats, vec:{}};
   DATA.tractById = new Map(stats.tracts.map(d => [String(d.GEOID), d]));
   // preload every change-vector file up front: scene switches then never
   // wait on the network, so there is no async state to race or ghost
@@ -487,7 +532,26 @@ function drawMapVectors(scene, city, projection){
       .attr("fill", fillFor);
     gOverlay.selectAll("*").remove();
   } else {
-    gTracts.selectAll("path").remove();
+    if(scene.bg){
+      // block groups under the patches, tinted by detected-decay share;
+      // hover one for its ACS profile — the detail layer for zooming in
+      const dv = f => +f.properties["decay density"] || 0;
+      const pos = DATA.blockgroups.features.map(dv).filter(v=>v>0).sort(d3.ascending);
+      const cuts = [.2,.4,.6,.8].map(q => d3.quantileSorted(pos, q));
+      const tint = v => v <= 0 ? "transparent"
+        : C.ramp[Math.min(4, 1 + cuts.filter(c => v > c).length)];
+      gTracts.selectAll("path").data(DATA.blockgroups.features).join("path")
+        .attr("d", path)
+        .attr("fill", f => tint(dv(f))).attr("fill-opacity", .38)
+        .attr("stroke", C.mute).attr("stroke-width", .35).attr("stroke-opacity",.5)
+        .attr("opacity",1).attr("transform",null)
+        .style("cursor","crosshair")
+        .style("pointer-events","all")
+        .on("mousemove", (e,f) => readoutBG(f.properties))
+        .on("mouseleave", () => readoutCity(city));
+    } else {
+      gTracts.selectAll("path").remove();
+    }
     // vector change patches, preloaded at startup: reference (observed
     // truth) in grey under the detected classes; every patch hoverable
     const wanted = (scene.reference || []).map(k => ({key: city+"|"+k, ref:true,  cls:k.split("|")[1]}))
@@ -547,12 +611,14 @@ function legendFor(scene){
     ["LOWEST FIFTH","SECOND","THIRD","FOURTH","HIGHEST FIFTH"].forEach((t,i)=>swatchRow(C.ramp[i],t));
     ruleRow(C.ink,"STREET NETWORK");
   } else if(scene.type === "map"){
-    title("DETECTED CLASS");
+    title(scene.bg ? "DECAY BY BLOCK GROUP" : "DETECTED CLASS");
     (scene.layers||[]).forEach(key => {
       const cls = key.split("|")[1];
-      swatchRow(C.cls[cls], cls.toUpperCase());
+      swatchRow(C.cls[cls], (scene.bg ? "DETECTED " : "") + cls.toUpperCase());
     });
     if(scene.reference) swatchRow("#6f6f6f","OBSERVED TRUTH");
+    if(scene.bg)
+      ["LOW","","MID","","HIGH"].forEach((t,i)=>{ if(t) swatchRow(C.ramp[i], t+" DECAY SHARE"); });
     ruleRow(C.ink,"STREET NETWORK");
   } else if(scene.type === "infographic"){
     title("CLASSES");
@@ -604,6 +670,19 @@ function readoutPatch(d, city){
     ["CITY", p.city || city]];
   d3.select("#readout-body").html(
     '<h4>' + (d.ref ? "OBSERVED " : "DETECTED ") + d.cls.toUpperCase() + '</h4>' +
+    rows.map(r => '<div class="row"><span>'+r[0]+'</span><span>'+r[1]+'</span></div>').join(""));
+}
+function readoutBG(p){
+  const money = v => v == null ? "—" : "$" + d3.format(",.0f")(v);
+  const pct = v => v == null ? "—" : d3.format(".1%")(v);
+  const rows = [
+    ["DECAY SHARE", pct(+p["decay density"] || 0)],
+    ["POPULATION", d3.format(",")(p.population || 0)],
+    ["MED HH INCOME", money(p["median hh income"])],
+    ["POVERTY", pct(p["poverty rate"])],
+    ["VACANCY", pct(p["vacancy rate"])],
+    ["MED YEAR BUILT", p["median year built"] ? d3.format("d")(p["median year built"]) : "—"]];
+  d3.select("#readout-body").html('<h4>BLOCK GROUP ' + p.GEOID + '</h4>' +
     rows.map(r => '<div class="row"><span>'+r[0]+'</span><span>'+r[1]+'</span></div>').join(""));
 }
 function readoutCity(city){
@@ -717,7 +796,8 @@ INFOGRAPHIC.method = function(){
           ["COMPOSITE","summer median"],["RESOLUTION","30 m"]]},
     {t:"U-NET", s:"3 levels · 40 epochs", fill:C.sand,
      tip:[["ENCODER","32 / 64 / 128"],["LOSS","weighted CE + Tversky"],
-          ["PATCHES","128 px, stride 64"],["HOLDOUT","256 px checkerboard"]]},
+          ["CLASS WEIGHTS","1 : 18.6 : 10.2"],["PATCHES","128 px, stride 64"],
+          ["HOLDOUT","256 px checkerboard"]]},
     {t:"3 CLASSES", s:"no change / new dev / decay", fill:C.white,
      tip:[["0","no change"],["1","new development"],["2","decay"],
           ["PER PIXEL","every 30 m cell"]]}
@@ -756,16 +836,19 @@ INFOGRAPHIC.method = function(){
     .style("font-size","13px").attr("fill",C.mute).call(s=>reveal(s,820))
     .text("CHECK IT AGAINST WHAT THE CITY RECORDS");
 
-  const chipW = Math.min(160, W*0.26), chipH = 46, y3 = botY+12;
+  const chipW = Math.min(148, W*0.20), chipH = 46, y3 = botY+12;
   const chips = [
     {t:"311 CALLS", s:"298,608 vacancy reports", fill:C.detroit,
      tip:[["RECORDS","298,608"],["YEARS","2015–2025"],
           ["NAMING","vacancy · abandonment · danger"],["vs DETECTED","ρ −0.269"]]},
     {t:"DEMOLITION PERMITS", s:"11,209 buildings removed", fill:C.atlanta,
      tip:[["RECORDS","11,209"],["YEARS","2015–2025"],
-          ["CLOSEST TO","physical demolition"],["vs DETECTED","ρ −0.151"]]}
+          ["CLOSEST TO","physical demolition"],["vs DETECTED","ρ −0.151"]]},
+    {t:"VACANT BUILDINGS", s:"8,773 on the city inventory", fill:C.sand,
+     tip:[["RECORDS","8,773"],["SOURCE","Vacant Property Indicators"],
+          ["vs DETECTED","ρ −0.185"]]}
   ];
-  const cw = chipW*2 + Math.min(48,W*0.06);
+  const cw = chipW*chips.length + Math.min(48,W*0.06)*(chips.length-1);
   let cxx = cx - cw/2;
   chips.forEach((ch,i)=>{
     const grp = g.append("g");
@@ -785,6 +868,131 @@ INFOGRAPHIC.method = function(){
 /* Closing diagram: why demolition disappears below a 30 m pixel.
    One Landsat pixel drawn to scale, a rowhouse block inside it, one house
    removed — and the pixel's reflectance barely moves. */
+/* U-Net: the encoder–decoder U with skip connections, drawn to read in
+   one glance — context is squeezed out of the patch and detail carried
+   over the top, so the output is a map at the input's own resolution. */
+INFOGRAPHIC.unet = function(){
+  const g = gChart.append("g");
+  const reveal = (sel,delay) => sel.attr("opacity",0)
+      .transition().delay(delay).duration(500).ease(d3.easeCubicOut).attr("opacity",1);
+  const defs = g.append("defs");
+  defs.append("marker").attr("id","uarw").attr("viewBox","0 0 10 10")
+    .attr("refX",8).attr("refY",5).attr("markerWidth",6).attr("markerHeight",6)
+    .attr("orient","auto").append("path")
+    .attr("d","M0,0 L10,5 L0,10 z").attr("fill",C.ink);
+
+  const cx = W/2, base = H*0.52;
+  g.append("text").attr("x",cx).attr("y",H*0.10).attr("text-anchor","middle")
+    .style("font-size","13px").attr("fill",C.mute).call(s=>reveal(s,0))
+    .text("ENCODER — CONTEXT IN, DETAIL OVER THE TOP — DECODER");
+
+  const tipOn = (sel,t,rows) => sel.style("cursor","crosshair")
+    .on("mouseleave",tipHide).on("mousemove",e=>tipShow(e,tipRows(t,rows)));
+
+  // input / output patches flanking the U
+  const s0 = Math.min(H*0.20, W*0.13);
+  const bars = [
+    {h:.30,label:"32", enc:true}, {h:.21,label:"64", enc:true},
+    {h:.13,label:"128"}, {h:.21,label:"64"}, {h:.30,label:"32"}
+  ];
+  const bw = Math.min(46, W*0.055), bgap = Math.min(34, W*0.042);
+  const totalW = s0*2 + (bw+bgap)*bars.length + bgap*2 + 40;
+  let x = cx - totalW/2;
+
+  // input stack: three offset squares suggest the 18-channel cube
+  const inG = g.append("g");
+  [10,5,0].forEach(off => inG.append("rect")
+    .attr("x",x+off).attr("y",base-s0/2-off).attr("width",s0).attr("height",s0)
+    .attr("fill",C.white).attr("stroke",C.ink).attr("stroke-width",2));
+  inG.append("text").attr("x",x+s0/2+4).attr("y",base+s0/2+20).attr("text-anchor","middle")
+    .style("font-size","11px").text("18-CH PATCH");
+  tipOn(inG,"INPUT",[["PATCH","128 × 128 px"],
+    ["CHANNELS","7 bands + NDVI + NDBI, 2015 & 2025"],
+    ["TRAINING SET","28 patches, hold-out excluded"]]);
+  reveal(inG, 100);
+  x += s0 + bgap + 14;
+
+  // the U itself
+  const topY = i => base - bars[i].h*H/2;
+  bars.forEach((b,i) => {
+    const grp = g.append("g");
+    grp.append("rect").attr("x",x).attr("y",base-b.h*H/2)
+      .attr("width",bw).attr("height",b.h*H)
+      .attr("fill", i===2 ? C.gold : (b.enc ? C.sand : C.lime))
+      .attr("fill-opacity",.85).attr("stroke",C.ink).attr("stroke-width",2.2);
+    grp.append("text").attr("x",x+bw/2).attr("y",base+b.h*H/2+18)
+      .attr("text-anchor","middle").style("font-size","11px").text(b.label);
+    tipOn(grp, i===2 ? "BOTTLENECK" : (i<2 ? "ENCODER" : "DECODER"),
+      i===2 ? [["CHANNELS","128"],["ROLE","widest context, coarsest grid"]] :
+      i<2 ? [["ROLE","compress to context"],["BLOCK","3×3 conv ×2 · batch-norm · ReLU"],["THEN","2× max-pool"]]
+          : [["ROLE","expand back to resolution"],["UPSAMPLE","2× transposed conv"],["MERGES","the skip connection"]]);
+    reveal(grp, 220 + i*110);
+    if(i < bars.length-1){
+      const a = g.append("path")
+        .attr("d",`M${x+bw+3},${base} h${bgap-8}`)
+        .attr("stroke",C.ink).attr("stroke-width",2.2).attr("marker-end","url(#uarw)");
+      reveal(a, 280 + i*110);
+    }
+    b.x = x;
+    x += bw + bgap;
+  });
+
+  // skip connections arc over the top, dashed
+  [[0,4],[1,3]].forEach(([i,j],k) => {
+    const y0 = topY(i)-8, x0 = bars[i].x+bw/2, x1 = bars[j].x+bw/2;
+    const lift = 30 + k*4;
+    const p = g.append("path")
+      .attr("d",`M${x0},${y0} C ${x0},${y0-lift} ${x1},${y0-lift} ${x1},${topY(j)-8}`)
+      .attr("fill","none").attr("stroke",C.umber).attr("stroke-width",2)
+      .attr("stroke-dasharray","5 4").attr("marker-end","url(#uarw)");
+    reveal(p, 800 + k*140);
+  });
+  const skipLabel = g.append("text").attr("x",cx+ (s0-bw)/2 ).attr("y",topY(0)-44)
+    .attr("text-anchor","middle").style("font-size","11px").attr("fill",C.umber)
+    .text("SKIP CONNECTIONS");
+  tipOn(skipLabel,"SKIP CONNECTIONS",
+    [["WHAT","encoder features pasted into the decoder"],
+     ["WHY","fine detail survives the bottleneck"]]);
+  reveal(skipLabel, 940);
+
+  // output patch: three-class mosaic
+  x += 14;
+  const outG = g.append("g");
+  outG.append("rect").attr("x",x).attr("y",base-s0/2).attr("width",s0).attr("height",s0)
+    .attr("fill",C.white).attr("stroke",C.ink).attr("stroke-width",2);
+  const cell = s0/6;
+  const mosaic = [[1,2,"d"],[4,1,"n"],[2,4,"d"],[3,3,"d"],[1,4,"n"]];
+  mosaic.forEach(([mx,my,cl]) => outG.append("rect")
+    .attr("x",x+mx*cell).attr("y",base-s0/2+my*cell).attr("width",cell).attr("height",cell)
+    .attr("fill", cl==="d" ? C.cls.decay : C.cls["new development"])
+    .attr("stroke",C.ink).attr("stroke-width",.8));
+  outG.append("text").attr("x",x+s0/2).attr("y",base+s0/2+20).attr("text-anchor","middle")
+    .style("font-size","11px").text("3-CLASS MAP");
+  tipOn(outG,"OUTPUT",[["PER PIXEL","no change / new dev / decay"],
+    ["LOSS","weighted cross-entropy + Tversky"],["CLASS WEIGHTS","1 : 18.6 : 10.2"]]);
+  reveal(outG, 760);
+
+  // facts row
+  const facts = [
+    ["SUPERVISED","learns from NLCD-derived labels"],
+    ["CLASS WEIGHTS 1 : 18.6 : 10.2","rare change up-weighted in the loss"],
+    ["40 EPOCHS","checkerboard blocks held out"]
+  ];
+  const fw = Math.min(196, W*0.28), fh = 44, fy = H*0.80;
+  let fx = cx - (fw*3 + 28)/2;
+  facts.forEach(([t,sub],i) => {
+    const grp = g.append("g");
+    grp.append("rect").attr("x",fx).attr("y",fy).attr("width",fw).attr("height",fh)
+      .attr("fill",C.white).attr("stroke",C.ink).attr("stroke-width",2).attr("rx",2);
+    grp.append("text").attr("x",fx+fw/2).attr("y",fy+19).attr("text-anchor","middle")
+      .style("font-size","10.5px").text(t);
+    grp.append("text").attr("x",fx+fw/2).attr("y",fy+35).attr("text-anchor","middle")
+      .style("font-size","9.5px").attr("fill",C.mute).attr("font-family",HELV).text(sub);
+    reveal(grp, 1000 + i*120);
+    fx += fw + 14;
+  });
+};
+
 INFOGRAPHIC.pixel = function(){
   const g = gChart.append("g");
   const cx = W/2;
