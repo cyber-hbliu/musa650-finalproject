@@ -8,7 +8,7 @@
 <script src="https://cdn.jsdelivr.net/npm/d3-tile@0.0.4/build/d3-tile.min.js"></script>
 <style>
 :root{
-  --paper:#f1f2e0; --ink:#381f04; --mute:#5a544c; --white:#ffffff;
+  --paper:#fafaf8; --ink:#381f04; --mute:#5a544c; --white:#ffffff;
   --sand:#dfd78b; --gold:#dfad10; --lime:#bad012; --umber:#68542d;
   --philly:#dfd78b; --detroit:#9ab0a6; --atlanta:#acd2d6; --furniture:#c9c4ab;
 }
@@ -18,18 +18,18 @@ body{background:var(--paper);color:var(--ink);
 #stage{position:fixed;top:0;left:0;width:60vw;height:100vh;overflow:hidden}
 #stage svg{width:100%;height:100%;display:block}
 
-/* tile basemap: warmed and multiplied into the paper so it reads as a print.
-   Tiles and furniture must never intercept the pointer — but the overlay
-   layer now holds hoverable vector patches, so it stays interactive. */
+/* tiles render untinted: the page background is the tiles' own land colour,
+   so map and page read as one continuous surface. Raster layers never take
+   the pointer; the world layer pans and zooms under d3.zoom. */
 #basemap,#roads,#labels,#bounds{pointer-events:none}
-#basemap{mix-blend-mode:multiply}
-/* keep the tiles' own street network legible — warm it, don't wash it out */
-#basemap image{filter:sepia(.16) saturate(.92) brightness(.94) contrast(1.28)}
-#labels image{filter:sepia(.10) brightness(.86) contrast(1.12);opacity:.96}
+#canvas.pan{cursor:grab}
+#canvas.pan:active{cursor:grabbing}
+/* strokes keep constant screen width while the world layer scales */
+#world path{vector-effect:non-scaling-stroke}
 
 #legend{position:fixed;left:24px;bottom:26px;z-index:5;font-size:11px;
   letter-spacing:.04em;line-height:1.85;max-width:240px;
-  background:rgba(241,242,224,.86);padding:10px 12px;border:1px solid rgba(56,31,4,.10)}
+  background:rgba(250,250,248,.9);padding:10px 12px;border:1px solid rgba(56,31,4,.12)}
 #legend:empty{display:none}
 #legend .ttl{font-size:10px;letter-spacing:.14em;color:var(--mute);margin-bottom:7px}
 #legend .swatch{display:inline-block;width:16px;height:11px;margin-right:8px;
@@ -257,14 +257,17 @@ const SCENES = [
 ];
 
 const svg = d3.select("#canvas");
+/* the world group holds every vector layer; d3.zoom pans and scales it as
+   one unit while the raster tiles are recomputed per frame underneath */
 const gBasemap = svg.append("g").attr("id","basemap"),
-      gRoads   = svg.append("g").attr("id","roads"),
-      gTracts  = svg.append("g"),
-      gOverlay = svg.append("g").attr("id","overlay"),
+      gWorld   = svg.append("g").attr("id","world"),
+      gRoads   = gWorld.append("g").attr("id","roads"),
+      gTracts  = gWorld.append("g").attr("id","tracts"),
+      gOverlay = gWorld.append("g").attr("id","overlay"),
+      gBounds  = gWorld.append("g").attr("id","bounds"),
       gLabels  = svg.append("g").attr("id","labels"),
-      gBounds  = svg.append("g").attr("id","bounds"),
       gChart   = svg.append("g").attr("class","chart");
-const MAP_LAYERS = [gBasemap,gRoads,gTracts,gOverlay,gLabels,gBounds];
+const MAP_LAYERS = [gBasemap,gWorld,gLabels];
 let W = 0, H = 0, DATA = {}, current = null, view = null;
 
 function size(){
@@ -274,17 +277,21 @@ function size(){
 }
 window.addEventListener("resize", () => { size(); if(current) render(current, false); });
 
-/* readout pops out only while the pointer is over the map */
-const stageEl = document.getElementById("stage");
-
 Promise.all([
   d3.json("data/boundaries.geojson"),
   d3.json("data/roads.geojson"),
   d3.json("data/tracts.geojson"),
   d3.json("data/stats.json")
 ]).then(([bounds, roads, tracts, stats]) => {
-  DATA = {bounds, roads, tracts, stats};
+  DATA = {bounds, roads, tracts, stats, vec:{}};
   DATA.tractById = new Map(stats.tracts.map(d => [String(d.GEOID), d]));
+  // preload every change-vector file up front: scene switches then never
+  // wait on the network, so there is no async state to race or ghost
+  const keys = Object.keys(stats.vectors || {});
+  return Promise.all(keys.map(k =>
+    d3.json(stats.vectors[k].file).catch(() => null)
+  )).then(fcs => { keys.forEach((k,i) => DATA.vec[k] = fcs[i]); });
+}).then(() => {
   size();
   buildSteps();
   observe();
@@ -329,20 +336,6 @@ function tipHide(){ d3.select("#tip").classed("on", false); }
 // every scene change clears any tooltip left hanging mid-transition
 function hoverable(sel){ return sel.style("cursor","crosshair").on("mouseleave", tipHide); }
 
-/* ---------- vector change patches ---------- */
-
-const VEC_CACHE = {};
-let overlayToken = 0;
-function loadVectors(keys){
-  return Promise.all(keys.map(k => {
-    if(VEC_CACHE[k] !== undefined) return Promise.resolve(VEC_CACHE[k]);
-    const meta = DATA.stats.vectors && DATA.stats.vectors[k];
-    if(!meta) return Promise.resolve(VEC_CACHE[k] = null);
-    return d3.json(meta.file).then(fc => VEC_CACHE[k] = fc)
-                             .catch(() => VEC_CACHE[k] = null);
-  }));
-}
-
 /* ---------- projection ---------- */
 
 function frameFor(city){
@@ -355,38 +348,30 @@ function projectionFrom(v){
   return d3.geoMercator().center(v.center).scale(v.scale).translate([W/2, H/2]);
 }
 
-/* ---------- deconstruct / reconstruct ----------
-   No camera move. Each map is taken apart into its own pieces — basemap
-   tiles, streets, tracts, detected pixels, city edge — and put back
-   together in that order, so you watch the map being built rather than
-   flown over. */
+/* ---------- pan / zoom ----------
+   The basemap is live: drag to pan, ctrl/⌘ + wheel or double-click to
+   zoom (a bare wheel keeps scrolling the story). Vector layers ride the
+   world group's transform — no re-projection per frame — and the tiles
+   re-tile to the composed scale, so detail sharpens as you go in. */
 
-const ASSEMBLE = 820;               // duration of one piece's flight home
-function noise(i){                  // deterministic jitter, stable per index
-  const x = Math.sin(i * 12.9898 + 78.233) * 43758.5453;
-  return x - Math.floor(x);
-}
-// piece starts thrown outward from the frame centre, rotated and shrunk
-function scatterFrom(cx, cy, i, spread){
-  const a = noise(i) * Math.PI * 2,
-        r = spread * (0.45 + noise(i + 7) * 0.75),
-        rot = (noise(i + 13) - 0.5) * 46;
-  return `translate(${cx + Math.cos(a)*r},${cy + Math.sin(a)*r})`
-       + ` rotate(${rot}) scale(0.66) translate(${-cx},${-cy})`;
-}
-const HOME = "translate(0,0) rotate(0) scale(1)";
-// stagger radially: pieces nearest the centre land first, the edge follows
-function radialDelay(cx, cy, base, span){
-  const R = Math.hypot(W, H) / 2;
-  return Math.min(1, Math.hypot(cx - W/2, cy - H/2) / R) * span + base;
-}
+let PROJ = null;
+const zoom = d3.zoom().scaleExtent([0.6, 60])
+  .filter(e => (e.type !== "wheel" || e.ctrlKey || e.metaKey) && !e.button)
+  .on("zoom", e => {
+    if(!PROJ) return;
+    gWorld.attr("transform", e.transform);
+    drawBasemap(PROJ, e.transform);
+  });
 
 /* ---------- web-mercator tile basemap ---------- */
 
-function drawBasemap(projection, assemble){
+function drawBasemap(projection, t){
   if(typeof d3.tile !== "function") return;
-  const k = projection.scale() * 2 * Math.PI;
-  const tiles = d3.tile().size([W,H]).scale(k).translate(projection([0,0]))();
+  t = t || d3.zoomIdentity;
+  // compose the base projection with the current zoom transform
+  const k = projection.scale() * 2 * Math.PI * t.k;
+  const origin = t.apply(projection([0,0]));
+  const tiles = d3.tile().size([W,H]).scale(k).translate(origin)();
   if(!tiles.length || !isFinite(tiles.scale)) return;
   const px = (window.devicePixelRatio > 1) ? "@2x" : "";
   const sub = d => "abcd"[(d.x*7 + d.y) & 3];
@@ -399,59 +384,47 @@ function drawBasemap(projection, assemble){
   const url = (style,d) =>
     `https://${sub(d)}.basemaps.cartocdn.com/${style}/${d.z}/${d.x}/${d.y}${px}.png`;
 
-  const base = gBasemap.style("display",null).attr("opacity",1)
-    .selectAll("image").data(tiles, key)
+  gBasemap.selectAll("image").data(tiles, key)
     .join("image").attr("href", d => url("light_nolabels", d)).call(place);
-  const lab = gLabels.style("display",null).attr("opacity",1)
-    .selectAll("image").data(tiles, key)
+  gLabels.selectAll("image").data(tiles, key)
     .join("image").attr("href", d => url("light_only_labels", d)).call(place);
-
-  if(!assemble){
-    base.attr("transform",null).attr("opacity",1);
-    lab.attr("transform",null).attr("opacity",1);
-    return;
-  }
-  // tiles drop into the grid first — the ground the rest is built on
-  const tileDelay = d => radialDelay(+d3.select(d).attr("x") + tiles.scale/2,
-                                     +d3.select(d).attr("y") + tiles.scale/2, 0, 260);
-  base.interrupt().attr("opacity",0)
-    .attr("transform",function(d,i){
-      return scatterFrom(+this.getAttribute("x")+tiles.scale/2,
-                         +this.getAttribute("y")+tiles.scale/2, i, 90); })
-    .transition().delay(function(){ return tileDelay(this); })
-    .duration(ASSEMBLE).ease(d3.easeCubicOut)
-    .attr("transform", HOME).attr("opacity",1);
-  lab.interrupt().attr("opacity",0).attr("transform",null)
-    .transition().delay(360).duration(520).attr("opacity",1);
 }
 
 /* ---------- render dispatch ---------- */
 
-function render(scene, animate){
+function render(scene){
   current = scene;
   tipHide();
+  // kill every in-flight transition first: scenes must never bleed into
+  // each other, however fast the reader scrolls
+  svg.selectAll("*").interrupt();
   const isFlat = scene.type === "chart" || scene.type === "infographic";
   gChart.style("display", isFlat ? null : "none");
   MAP_LAYERS.forEach(g => g.style("display", isFlat ? "none" : null));
   d3.select("#readout").classed("enabled", !isFlat);
 
+  // chrome updates first, so it can never be left stale by a draw error
+  legendFor(scene);
+  if(!isFlat){
+    if(scene.type === "tract") readoutHint("Hover any tract");
+    else readoutCity(scene.city);
+  }
+
   if(isFlat){
-    gChart.selectAll("*").interrupt(); gChart.selectAll("*").remove();
+    PROJ = null;
+    svg.on(".zoom", null).attr("class", null);
+    gChart.selectAll("*").remove();
     (scene.type === "infographic" ? INFOGRAPHIC[scene.art] : CHARTS[scene.chart])();
-    legendFor(scene);
     return;
   }
   const city = scene.type === "tract" ? "Philadelphia" : scene.city;
-  // no camera move: reframe instantly, then rebuild the map piece by piece
-  const cityChanged = !view || view.city !== city;
   view = Object.assign({city}, frameFor(city));
-  const projection = projectionFrom(view);
-  const assemble = animate && cityChanged;
-  drawBasemap(projection, assemble);
-  drawMapVectors(scene, city, projection, animate, assemble);
-  legendFor(scene);
-  if(scene.type === "tract") readoutHint("Hover any tract");
-  else readoutCity(city);
+  PROJ = projectionFrom(view);
+  // live basemap: drag pans, ctrl/⌘+wheel or double-click zooms
+  svg.attr("class","pan").call(zoom);
+  gWorld.attr("transform", null);
+  svg.call(zoom.transform, d3.zoomIdentity);   // fires the handler → tiles
+  drawMapVectors(scene, city, PROJ);
 }
 
 /* TIGER street network, drawn over the tiles. The basemap carries roads too,
@@ -462,30 +435,21 @@ const ROAD_STYLE = {
   S1200:{w:0.9, o:.42},   // secondary arterials
   S1400:{w:0.35,o:.26}    // local streets
 };
-function drawRoads(city, path, faint, assemble){
+function drawRoads(city, path, faint){
   const roads = DATA.roads.features.filter(f => f.properties.city === city);
-  const target = faint ? .45 : 1;
-  gRoads.selectAll("path").data(roads).join("path")
+  gRoads.attr("opacity", faint ? .45 : 1)
+    .selectAll("path").data(roads).join("path")
     .attr("d", path).attr("fill","none")
     .attr("stroke", C.ink).attr("stroke-linecap","round")
     .attr("stroke-width", d => (ROAD_STYLE[d.properties.MTFCC]||ROAD_STYLE.S1400).w)
     .attr("stroke-opacity", d => (ROAD_STYLE[d.properties.MTFCC]||ROAD_STYLE.S1400).o);
-  // 9k segments — animate the group, not each line
-  gRoads.interrupt();
-  if(assemble){
-    gRoads.attr("opacity",0).attr("transform","scale(1.04)")
-      .transition().delay(300).duration(760).ease(d3.easeCubicOut)
-      .attr("opacity",target).attr("transform","scale(1)");
-  } else {
-    gRoads.attr("transform",null).transition().duration(320).attr("opacity",target);
-  }
 }
 
-function drawMapVectors(scene, city, projection, animate, assemble){
+function drawMapVectors(scene, city, projection){
   const path = d3.geoPath(projection);
 
   // streets sit under the choropleth on tract scenes, over the tiles otherwise
-  drawRoads(city, path, scene.type === "tract", assemble);
+  drawRoads(city, path, scene.type === "tract");
 
   if(scene.type === "tract"){
     const values = DATA.tracts.features
@@ -500,94 +464,53 @@ function drawMapVectors(scene, city, projection, animate, assemble){
       const row = DATA.tractById.get(String(f.properties.GEOID));
       return colour(row ? +row[scene.layer] : 0);
     };
-    const cells = gTracts.selectAll("path").data(DATA.tracts.features).join("path")
+    // recolour in place with a short stagger — no movement, no waiting
+    gTracts.selectAll("path").data(DATA.tracts.features).join("path")
       .attr("d", path)
       .attr("fill-opacity", .82)
       .attr("stroke", C.mute).attr("stroke-width", 0.4)
+      .attr("opacity",1).attr("transform",null)
       .style("cursor","crosshair")
-      .on("mousemove", (e,f) => readoutTract(f.properties.GEOID));
-
-    cells.interrupt();
-    if(assemble){
-      // 408 tracts fly back into the city, centre outward
-      cells.attr("fill", fillFor).attr("opacity",0)
-        .attr("transform",(f,i)=>{ const c=path.centroid(f);
-          return isFinite(c[0]) ? scatterFrom(c[0],c[1],i,150) : null; })
-        .transition().delay((f,i)=>{ const c=path.centroid(f);
-          return isFinite(c[0]) ? radialDelay(c[0],c[1],420,300) : 420; })
-        .duration(ASSEMBLE).ease(d3.easeCubicOut)
-        .attr("transform", HOME).attr("opacity",1);
-    } else {
-      // same city, new variable: recolour in place, staggered
-      cells.attr("transform",null).attr("opacity",1)
-        .transition().delay((f,i)=>(i%23)*9).duration(560).ease(d3.easeCubicOut)
-        .attr("fill", fillFor);
-    }
+      .on("mousemove", (e,f) => readoutTract(f.properties.GEOID))
+      .transition().delay((f,i)=>(i%23)*6).duration(360).ease(d3.easeCubicOut)
+      .attr("fill", fillFor);
     gOverlay.selectAll("*").remove();
   } else {
     gTracts.selectAll("path").remove();
-    // vector change patches: reference (observed truth) renders first in
-    // grey, then the detected classes; every patch is hoverable
-    const refKeys = (scene.reference || []).map(k => ({key: city+"|"+k, ref:true,  cls:k.split("|")[1]}));
-    const layKeys = (scene.layers    || []).map(k => ({key: city+"|"+k, ref:false, cls:k.split("|")[1]}));
-    const wanted = refKeys.concat(layKeys);
-    const token = ++overlayToken;
-
-    loadVectors(wanted.map(w => w.key)).then(fcs => {
-      if(token !== overlayToken) return;   // a newer scene took over
-      const feats = [];
-      wanted.forEach((w,j) => (fcs[j] && fcs[j].features || []).forEach(f =>
-        feats.push({f, cls:w.cls, ref:w.ref})));
-
-      const sel = gOverlay.selectAll("path").data(feats).join("path")
-        .attr("d", d => path(d.f))
-        .attr("fill", d => d.ref ? "#6f6f6f" : C.cls[d.cls])
-        .attr("fill-opacity", d => d.ref ? .5 : .88)
-        .attr("stroke", C.ink).attr("stroke-width", .5)
-        .call(hoverable)
-        .on("mousemove", (e,d) => {
-          const p = d.f.properties || {};
-          tipShow(e, tipRows((d.ref ? "OBSERVED " : "DETECTED ") + d.cls.toUpperCase(), [
-            ["AREA", p.area_km2 != null ? d3.format(".4f")(p.area_km2)+" km²" : "—"],
-            ["≈ PIXELS", p.area_km2 != null ? d3.format(",.0f")(p.area_km2/0.0009) : "—"],
-            ["CITY", p.city || city]]));
-        });
-
-      sel.interrupt();
-      if(assemble){
-        // patches are the last pieces home: each flies in from outside
-        sel.attr("opacity",0)
-          .attr("transform",(d,i)=>{ const c = path.centroid(d.f);
-            return isFinite(c[0]) ? scatterFrom(c[0],c[1],i,140) : null; })
-          .transition().delay((d,i)=>{ const c = path.centroid(d.f);
-            return (isFinite(c[0]) ? radialDelay(c[0],c[1],700,320) : 700) + (d.ref?0:120); })
-          .duration(ASSEMBLE).ease(d3.easeCubicOut)
-          .attr("transform", HOME).attr("opacity", d => d.ref ? .9 : 1);
-      } else {
-        sel.attr("transform",null).attr("opacity",0)
-          .transition().delay((d,i)=>(i%17)*10).duration(480)
-          .attr("opacity", d => d.ref ? .9 : 1);
-      }
+    // vector change patches, preloaded at startup: reference (observed
+    // truth) in grey under the detected classes; every patch hoverable
+    const wanted = (scene.reference || []).map(k => ({key: city+"|"+k, ref:true,  cls:k.split("|")[1]}))
+      .concat((scene.layers || []).map(k => ({key: city+"|"+k, ref:false, cls:k.split("|")[1]})));
+    const feats = [];
+    wanted.forEach(w => {
+      const fc = DATA.vec[w.key];
+      if(fc) fc.features.forEach(f => feats.push({f, cls:w.cls, ref:w.ref}));
     });
+
+    gOverlay.selectAll("path").data(feats).join("path")
+      .attr("d", d => path(d.f))
+      .attr("fill", d => d.ref ? "#6f6f6f" : C.cls[d.cls])
+      .attr("fill-opacity", d => d.ref ? .5 : .88)
+      .attr("stroke", C.ink).attr("stroke-width", .5)
+      .attr("transform",null)
+      .call(hoverable)
+      .on("mousemove", (e,d) => {
+        const p = d.f.properties || {};
+        tipShow(e, tipRows((d.ref ? "OBSERVED " : "DETECTED ") + d.cls.toUpperCase(), [
+          ["AREA", p.area_km2 != null ? d3.format(".4f")(p.area_km2)+" km²" : "—"],
+          ["≈ PIXELS", p.area_km2 != null ? d3.format(",.0f")(p.area_km2/0.0009) : "—"],
+          ["CITY", p.city || city]]));
+      })
+      .attr("opacity",0)
+      .transition().delay((d,i)=>Math.min(i*1.5, 160)).duration(240)
+      .attr("opacity", d => d.ref ? .9 : 1);
   }
 
-  // the city edge draws itself closed, sealing the reconstruction
-  const edge = gBounds.selectAll("path")
+  gBounds.selectAll("path")
     .data(DATA.bounds.features.filter(f => f.properties.city === city))
     .join("path").attr("d", path)
-    .attr("fill","none").attr("stroke", C.ink).attr("stroke-width", 2.6);
-  edge.interrupt();
-  if(assemble){
-    edge.each(function(){
-      const L = this.getTotalLength();
-      d3.select(this).attr("stroke-dasharray",`${L} ${L}`).attr("stroke-dashoffset",L)
-        .transition().delay(200).duration(1500).ease(d3.easeCubicInOut)
-        .attr("stroke-dashoffset",0)
-        .on("end", function(){ d3.select(this).attr("stroke-dasharray",null); });
-    });
-  } else {
-    edge.attr("stroke-dasharray",null).attr("stroke-dashoffset",null);
-  }
+    .attr("fill","none").attr("stroke", C.ink).attr("stroke-width", 2.6)
+    .attr("stroke-dasharray",null).attr("stroke-dashoffset",null);
 }
 
 /* ---------- legend and readout ---------- */
@@ -757,18 +680,18 @@ INFOGRAPHIC.method = function(){
   hoverable(p1).on("mousemove", e=>tipShow(e, tipRows("NEW DEVELOPMENT", [
     ["NLCD RULE","rank 0 → ≥ 1"], ["PERSISTENCE","median of 3 years"],
     ["DETECTED, 3 CITIES","1.17 km²"]])));
-  reveal(p1, 200);
+  reveal(p1, 120);
   const p2 = pair(cx + W*0.20, C.ramp[4], C.ramp[2], C.cls.decay,
               "DECAY", "built land → dimmed  (blight)");
   hoverable(p2).on("mousemove", e=>tipShow(e, tipRows("DECAY", [
     ["NLCD RULE","late rank < early rank"], ["PERSISTENCE","median of 3 years"],
     ["DETECTED, 3 CITIES","30.85 km²"]])));
-  reveal(p2, 380);
+  reveal(p2, 220);
 
   // ---- B. the pipeline ----
   const midY = H*0.46;
   g.append("text").attr("x",cx).attr("y",midY-6).attr("text-anchor","middle")
-    .style("font-size","13px").attr("fill",C.mute).call(s=>reveal(s,560))
+    .style("font-size","13px").attr("fill",C.mute).call(s=>reveal(s,320))
     .text("HOW THE SATELLITE MAP IS MADE");
 
   const boxW = Math.min(150, W*0.24), boxH = 52, y2 = midY+16;
@@ -795,13 +718,13 @@ INFOGRAPHIC.method = function(){
     grp.append("text").attr("x",bx+boxW/2).attr("y",y2+40).attr("text-anchor","middle")
       .style("font-size","10px").attr("fill",C.mute).attr("font-family",HELV).text(st.s);
     hoverable(grp).on("mousemove", e=>tipShow(e, tipRows(st.t, st.tip)));
-    reveal(grp, 700 + i*180);
+    reveal(grp, 400 + i*120);
     if(i<2){
       const gapW = (totalW - boxW*3)/2;
       const a = g.append("path")
         .attr("d",`M${bx+boxW},${y2+boxH/2} h${gapW}`)
         .attr("stroke",C.ink).attr("stroke-width",2.4).attr("marker-end","url(#arw)");
-      reveal(a, 790 + i*180);
+      reveal(a, 460 + i*120);
     }
     bx += boxW + Math.min(70,W*0.09);
   });
@@ -812,9 +735,9 @@ INFOGRAPHIC.method = function(){
     .attr("d",`M${cx},${y2+boxH} v${botY-(y2+boxH)-14}`)
     .attr("stroke",C.ink).attr("stroke-width",2.4)
     .attr("stroke-dasharray","2 5").attr("marker-end","url(#arw)");
-  reveal(vline, 1300);
+  reveal(vline, 760);
   g.append("text").attr("x",cx).attr("y",botY-2).attr("text-anchor","middle")
-    .style("font-size","13px").attr("fill",C.mute).call(s=>reveal(s,1400))
+    .style("font-size","13px").attr("fill",C.mute).call(s=>reveal(s,820))
     .text("CHECK IT AGAINST WHAT THE CITY RECORDS");
 
   const chipW = Math.min(160, W*0.26), chipH = 46, y3 = botY+12;
@@ -838,7 +761,7 @@ INFOGRAPHIC.method = function(){
     grp.append("text").attr("x",cxx+chipW/2).attr("y",y3+37).attr("text-anchor","middle")
       .style("font-size","10px").attr("fill",C.mute).attr("font-family",HELV).text(ch.s);
     hoverable(grp).on("mousemove", e=>tipShow(e, tipRows(ch.t, ch.tip)));
-    reveal(grp, 1500 + i*180);
+    reveal(grp, 880 + i*120);
     cxx += chipW + Math.min(48,W*0.06);
   });
 };
@@ -893,13 +816,13 @@ INFOGRAPHIC.pixel = function(){
 
   // demolish one: it flies out, deconstruction-style, and the pixel shrugs
   const gone = houses[2];
-  gone.transition().delay(1250).duration(800).ease(d3.easeCubicIn)
+  gone.transition().delay(850).duration(600).ease(d3.easeCubicIn)
     .attr("transform",`translate(${px*0.16},${-px*0.34}) rotate(14)`)
     .attr("opacity",0);
   const cross = g.append("path")
     .attr("d",`M${+gone.attr("x")},${rowY+hh*0.2} l${hw},${hh*0.6} m0,${-hh*0.6} l${-hw},${hh*0.6}`)
     .attr("stroke",C.gold).attr("stroke-width",3).attr("fill","none");
-  reveal(cross, 2050);
+  reveal(cross, 1400);
 
   // the arithmetic
   const fy = y0 + px + 44;
@@ -913,13 +836,13 @@ INFOGRAPHIC.pixel = function(){
     t.append("tspan").style("font-size","11px").text(r[0]+"  ");
     t.append("tspan").style("font-size","12px").attr("fill",C.umber)
       .attr("font-family",HELV).attr("font-weight","700").text(r[1]);
-    reveal(t, 2300+i*220);
+    reveal(t, 1550+i*160);
   });
   const closing = g.append("text").attr("x",cx).attr("y",fy+facts.length*24+30)
     .attr("text-anchor","middle").style("font-size","11px")
     .attr("fill",C.mute).attr("font-family",HELV)
     .text("what does move a pixel: a sparse edge parcel going to seed — real change, not blight");
-  reveal(closing, 3050);
+  reveal(closing, 2050);
 };
 
 /* ---------- charts ---------- */
@@ -951,17 +874,17 @@ const CHARTS = {
         .attr("stroke-linecap","round").attr("d",line);
       const L = p.node().getTotalLength();
       p.attr("stroke-dasharray",`${L} ${L}`).attr("stroke-dashoffset",L)
-        .transition().delay(gi*260).duration(1400).ease(d3.easeCubicInOut)
+        .transition().delay(gi*140).duration(800).ease(d3.easeCubicInOut)
         .attr("stroke-dashoffset",0);
       const last = vals[vals.length-1];
       g.append("circle").attr("cx",x(last.year)).attr("cy",y(last.intensity_change))
         .attr("fill",C.city[city]).attr("stroke",C.ink).attr("stroke-width",2).attr("r",0)
-        .transition().delay(gi*260+1400).duration(420).ease(d3.easeBackOut).attr("r",5.5);
+        .transition().delay(gi*140+800).duration(300).ease(d3.easeBackOut).attr("r",5.5);
       g.append("text").attr("class","label").attr("x", x(last.year)-12)
         .attr("y", y(last.intensity_change) + (city==="Detroit"?18:-12)).style("font-size","11px")
         .attr("text-anchor","end").attr("fill",C.city[city]).attr("opacity",0)
         .text(city.toUpperCase())
-        .transition().delay(gi*260+1500).duration(400).attr("opacity",1);
+        .transition().delay(gi*140+860).duration(300).attr("opacity",1);
       // hoverable per-year markers, revealed after the line finishes drawing
       g.selectAll(null).data(vals).join("circle")
         .attr("cx",d=>x(d.year)).attr("cy",d=>y(d.intensity_change))
@@ -971,7 +894,7 @@ const CHARTS = {
           ["Δ INTENSITY", d3.format("+.4f")(d.intensity_change)],
           ["DEVELOPED", d3.format(",.1f")(d.developed_km2)+" km²"],
           ["MEAN CLASS", d3.format(".3f")(d.mean_intensity)]])))
-        .transition().delay(gi*260+1400).duration(300).attr("r",3.2);
+        .transition().delay(gi*140+800).duration(240).attr("r",3.2);
     });
   },
 
@@ -989,7 +912,7 @@ const CHARTS = {
       const nd = d["predicted_km2_new development"], dc = d["predicted_km2_decay"];
       const conn = g.append("line").attr("x1",x(nd)).attr("x2",x(nd)).attr("y1",yc).attr("y2",yc)
         .attr("stroke",C.ink).attr("stroke-width",2.4);
-      conn.transition().delay(i*140).duration(750).ease(d3.easeCubicOut).attr("x2",x(dc));
+      conn.transition().delay(i*80).duration(500).ease(d3.easeCubicOut).attr("x2",x(dc));
       // city label
       g.append("text").attr("class","label").attr("x",-14).attr("y",yc+4)
         .attr("text-anchor","end").style("font-size","13px").text(d.city.toUpperCase());
@@ -1001,18 +924,18 @@ const CHARTS = {
       g.append("circle").attr("cx",x(nd)).attr("cy",yc).attr("r",0)
         .attr("fill",C.cls["new development"]).attr("stroke",C.ink).attr("stroke-width",2)
         .call(hoverable).on("mousemove", e=>cityTip(e,"new development",nd))
-        .transition().delay(i*140).duration(420).ease(d3.easeBackOut).attr("r",7);
+        .transition().delay(i*80).duration(300).ease(d3.easeBackOut).attr("r",7);
       // decay dot
       g.append("circle").attr("cx",x(nd)).attr("cy",yc).attr("r",7)
         .attr("fill",C.cls.decay).attr("stroke",C.ink).attr("stroke-width",2)
         .call(hoverable).on("mousemove", e=>cityTip(e,"decay",dc))
-        .transition().delay(i*140).duration(750).ease(d3.easeCubicOut).attr("cx",x(dc))
+        .transition().delay(i*80).duration(500).ease(d3.easeCubicOut).attr("cx",x(dc))
         .transition().duration(300).attr("r",9);
       // value labels
       g.append("text").attr("class","label").attr("x",x(dc)+16).attr("y",yc+4)
         .style("font-size","12px").attr("opacity",0)
         .text(d3.format(".1f")(dc)+" km²  ·  "+d3.format(".0f")(dc/nd)+"× new dev")
-        .transition().delay(i*140+750).duration(400).attr("opacity",1);
+        .transition().delay(i*80+500).duration(280).attr("opacity",1);
     });
   },
 
@@ -1033,7 +956,7 @@ const CHARTS = {
       const lo = d3.min(vals,d=>d.ap_decay), hi = d3.max(vals,d=>d.ap_decay);
       const conn = g.append("line").attr("x1",x(lo)).attr("x2",x(lo)).attr("y1",yc).attr("y2",yc)
         .attr("stroke",C.mute).attr("stroke-width",2);
-      conn.transition().delay(i*150).duration(700).ease(d3.easeCubicOut).attr("x2",x(hi));
+      conn.transition().delay(i*90).duration(450).ease(d3.easeCubicOut).attr("x2",x(hi));
       g.append("text").attr("class","label").attr("x",-14).attr("y",yc+4)
         .attr("text-anchor","end").style("font-size","13px").text(city.toUpperCase());
       vals.forEach((d,j) => {
@@ -1044,12 +967,12 @@ const CHARTS = {
             ["AP, DECAY", d3.format(".4f")(d.ap_decay)],
             ["F1, DECAY", d.f1_decay != null ? d3.format(".3f")(d.f1_decay) : "—"],
             ["EVALUATION", d.kind || "—"]])))
-          .transition().delay(i*150+120+j*90).duration(420).ease(d3.easeBackOut).attr("r",7);
+          .transition().delay(i*90+80+j*60).duration(300).ease(d3.easeBackOut).attr("r",7);
       });
       g.append("text").attr("class","label").attr("x",x(hi)+16).attr("y",yc+4)
         .style("font-size","12px").attr("opacity",0)
         .text("best "+d3.format(".3f")(hi))
-        .transition().delay(i*150+700).duration(400).attr("opacity",1);
+        .transition().delay(i*90+450).duration(280).attr("opacity",1);
     });
   },
 
@@ -1071,13 +994,13 @@ const CHARTS = {
         .attr("d", d3.line().x(d=>x(d[0])).y(d=>y(d[1])));
       const L = p.node().getTotalLength();
       p.attr("stroke-dasharray",`${L} ${L}`).attr("stroke-dashoffset",L)
-        .transition().delay(i*220).duration(1200).ease(d3.easeCubicInOut).attr("stroke-dashoffset",0);
+        .transition().delay(i*120).duration(700).ease(d3.easeCubicInOut).attr("stroke-dashoffset",0);
       // AP summary, stacked top-right so the labels never collide with the floors
       const m = DATA.stats.metrics.find(d => d.city===c.city && d.model==="u-net per-city");
       g.append("text").attr("class","label").attr("x", w-4).attr("y", 14 + i*19)
         .attr("text-anchor","end").style("font-size","11px").attr("fill",C.city[c.city])
         .attr("opacity",0).text(c.city.toUpperCase()+"  AP "+d3.format(".3f")(m.ap_decay))
-        .transition().delay(i*220+700).duration(400).attr("opacity",1);
+        .transition().delay(i*120+450).duration(280).attr("opacity",1);
       // invisible fat stroke over the curve: hover anywhere on it for details
       g.append("path").datum(c.points).attr("fill","none")
         .attr("stroke","transparent").attr("stroke-width",14)
@@ -1133,14 +1056,14 @@ const CHARTS = {
       .attr("fill","none").attr("stroke",C.ink).attr("stroke-width",2.6);
     const L = fp.node().getTotalLength();
     fp.attr("stroke-dasharray",`${L} ${L}`).attr("stroke-dashoffset",L)
-      .transition().delay(900).duration(900).ease(d3.easeCubicInOut).attr("stroke-dashoffset",0);
+      .transition().delay(600).duration(600).ease(d3.easeCubicInOut).attr("stroke-dashoffset",0);
 
     const v = DATA.stats.validation.find(d =>
       d.record==="311 vacancy" && d["decay from"]==="U-Net detection" && d.cell_m===300);
     g.append("text").attr("class","label").attr("x", w-4).attr("y", 18)
       .attr("text-anchor","end").attr("opacity",0)
       .text("SPEARMAN "+d3.format("+.3f")(v.spearman)+"   PARTIAL "+d3.format("+.3f")(v.partial_spearman))
-      .transition().delay(1400).duration(400).attr("opacity",1);
+      .transition().delay(1000).duration(280).attr("opacity",1);
   },
 
   scale(){
@@ -1164,8 +1087,8 @@ const CHARTS = {
         if(!dash){
           const L=p.node().getTotalLength();
           p.attr("stroke-dasharray",`${L} ${L}`).attr("stroke-dashoffset",L)
-            .transition().delay(gi*180).duration(1100).ease(d3.easeCubicInOut).attr("stroke-dashoffset",0);
-        } else { p.attr("opacity",0).transition().delay(gi*180+700).duration(500).attr("opacity",1); }
+            .transition().delay(gi*100).duration(650).ease(d3.easeCubicInOut).attr("stroke-dashoffset",0);
+        } else { p.attr("opacity",0).transition().delay(gi*100+420).duration(350).attr("opacity",1); }
       });
       vals.forEach(d=> g.append("circle").attr("cx",x(d.cell_m)).attr("cy",y(d.spearman))
         .attr("r",0).attr("fill",tone[record]||C.ink).attr("stroke",C.ink).attr("stroke-width",1.4)
@@ -1175,13 +1098,13 @@ const CHARTS = {
           ["PARTIAL", d3.format("+.3f")(d.partial_spearman)],
           ["CELLS", d3.format(",")(d.n_cells)],
           ["P-VALUE", d.p < 1e-4 ? "< 0.0001" : d3.format(".4f")(d.p)]])))
-        .transition().delay(gi*180+900).duration(300).ease(d3.easeBackOut).attr("r",4));
+        .transition().delay(gi*100+520).duration(240).ease(d3.easeBackOut).attr("r",4));
       const last = vals[vals.length-1];
       g.append("text").attr("class","label").attr("x", x(last.cell_m)-10)
         .attr("y", y(last.spearman)-9).style("font-size","11px")
         .attr("text-anchor","end").attr("fill",tone[record]||C.ink).attr("opacity",0)
         .text(record.toUpperCase())
-        .transition().delay(gi*180+1000).duration(400).attr("opacity",1);
+        .transition().delay(gi*100+600).duration(280).attr("opacity",1);
     });
   }
 };
