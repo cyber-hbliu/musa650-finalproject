@@ -4,6 +4,7 @@ I wanted to know whether a convolutional network trained on Landsat imagery coul
 
 The model works, in the narrow sense that it beats a spectral baseline on the decay class in two of three cities. Then I checked it against Philadelphia's own records, and the two disagree. Not weakly. The correlation between detected decay and recorded vacancy is negative at every spatial scale I tested, and it holds after controlling for the amount of building in each cell.
 
+CLAUDE CODE HELPS ME WITH D3 WEB BUILDUP - ANIMATION, DEPLOYMENT, CODE REVIEW
 
 ## Workflow
 
