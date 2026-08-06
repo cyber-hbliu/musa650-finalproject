@@ -3,8 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Detecting urban decay and new development from Landsat in Philadelphia, test in Detroit and Atlanta, 2015 to 2025</title>
+<title>What the satellite calls decay, and what the city calls blight — Landsat, 2015 to 2025</title>
 <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3-tile@0.0.4/build/d3-tile.min.js"></script>
 <style>
 :root{
   --paper:#f1f2e0; --ink:#381f04; --mute:#5a544c; --white:#ffffff;
@@ -16,43 +17,72 @@ body{background:var(--paper);color:var(--ink);
   font-family:"Archivo Black","Helvetica Neue",Helvetica,Arial,sans-serif;}
 #stage{position:fixed;top:0;left:0;width:60vw;height:100vh;overflow:hidden}
 #stage svg{width:100%;height:100%;display:block}
-#legend{position:fixed;left:24px;bottom:28px;z-index:5;font-size:11px;
-  letter-spacing:.04em;line-height:1.9;max-width:200px}
+
+/* tile basemap: warmed and multiplied into the paper so it reads as a print.
+   Tiles and furniture must never intercept the pointer, or tract hover dies. */
+#basemap,#labels,#overlay,#bounds{pointer-events:none}
+#basemap{mix-blend-mode:multiply}
+#basemap image{filter:sepia(.30) saturate(.72) brightness(1.05) contrast(.94)}
+#labels image{filter:sepia(.12) brightness(.92) contrast(1.05);opacity:.92}
+
+#legend{position:fixed;left:24px;bottom:26px;z-index:5;font-size:11px;
+  letter-spacing:.04em;line-height:1.85;max-width:240px;
+  background:rgba(241,242,224,.86);padding:10px 12px;border:1px solid rgba(56,31,4,.10)}
+#legend:empty{display:none}
+#legend .ttl{font-size:10px;letter-spacing:.14em;color:var(--mute);margin-bottom:7px}
 #legend .swatch{display:inline-block;width:16px;height:11px;margin-right:8px;
   border:1.4px solid var(--ink);vertical-align:middle}
+#legend .dot{display:inline-block;width:12px;height:12px;border-radius:50%;
+  margin-right:8px;border:1.6px solid var(--ink);vertical-align:middle}
 #legend .rule{display:inline-block;width:16px;height:0;margin-right:8px;
-  border-top:2px solid var(--furniture);vertical-align:middle}
-#readout{position:fixed;top:24px;left:calc(60vw - 268px);width:244px;z-index:6;
-  background:var(--white);border:2.4px solid var(--ink);padding:12px 14px;
-  font-size:11px;line-height:1.7;letter-spacing:.03em}
-#readout h4{font-size:12px;margin-bottom:6px}
+  border-top:2px solid var(--umber);vertical-align:middle}
+#legend .rule.dash{border-top-style:dashed}
+
+/* read-out box: hidden, pops out on map hover, anchored bottom-right of the map */
+#readout{position:fixed;bottom:26px;left:calc(60vw - 292px);width:268px;z-index:6;
+  background:var(--white);border:2.4px solid var(--ink);padding:13px 15px;
+  font-size:11px;line-height:1.7;letter-spacing:.03em;
+  box-shadow:7px 7px 0 rgba(56,31,4,.14);
+  opacity:0;transform:translateY(12px) scale(.98);pointer-events:none;
+  transition:opacity .30s ease,transform .30s cubic-bezier(.2,.9,.2,1)}
+#readout h4{font-size:12px;margin-bottom:7px;letter-spacing:.05em}
+#readout .hint{font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-weight:400;
+  font-style:italic;color:var(--mute)}
 #readout .row{display:flex;justify-content:space-between;gap:10px;
   font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-weight:700}
-#readout .row span:last-child{color:var(--umber)}
+#readout .row span:last-child{color:var(--umber);font-variant-numeric:tabular-nums}
+#stage:hover ~ #readout.enabled{opacity:1;transform:translateY(0) scale(1)}
+
 #story{margin-left:60vw;width:40vw;padding:0 6vw}
 .step{min-height:92vh;display:flex;flex-direction:column;justify-content:center;
   padding:8vh 0}
-.step h2{font-size:26px;line-height:1.15;margin-bottom:16px}
+.step h2{font-size:25px;line-height:1.16;margin-bottom:16px;letter-spacing:-.01em}
 .step p{font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-weight:400;
-  font-size:15.5px;line-height:1.65;color:#2c2318;margin-bottom:12px}
-.step .kicker{font-size:11px;letter-spacing:.16em;color:var(--mute);
-  margin-bottom:10px}
+  font-size:15.5px;line-height:1.66;color:#2c2318;margin-bottom:12px}
+.step p b{font-weight:700;color:var(--ink)}
+.step .kicker{font-size:11px;letter-spacing:.16em;color:var(--mute);margin-bottom:10px}
 .step.active h2{color:var(--ink)}
-.step:not(.active){opacity:.32;transition:opacity .4s}
+.step:not(.active){opacity:.30;transition:opacity .4s}
 .step.active{opacity:1}
 #masthead{min-height:100vh;display:flex;flex-direction:column;justify-content:center}
-#masthead h1{font-size:44px;line-height:1.05;margin-bottom:20px}
+#masthead h1{font-size:40px;line-height:1.08;margin-bottom:20px;letter-spacing:-.015em}
+#masthead .sub{font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-weight:400;
+  font-size:16px;line-height:1.6;color:#2c2318;margin-bottom:14px}
 #colophon{padding:12vh 0 16vh;font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;
   font-size:11px;line-height:1.7;color:var(--mute)}
-.chart text{font-family:"Archivo Black","Helvetica Neue",Helvetica,Arial,sans-serif;
-  fill:var(--ink)}
+.chart text{font-family:"Archivo Black","Helvetica Neue",Helvetica,Arial,sans-serif;fill:var(--ink)}
 .chart .axis text{font-size:11px}
 .chart .axis path,.chart .axis line{stroke:var(--ink);stroke-width:2}
+.chart .grid line{stroke:var(--ink);stroke-opacity:.10;stroke-width:1}
+.chart .grid path{stroke:none}
 .chart .label{font-size:12px}
+.body-font{font-family:"Helvetica Neue",Helvetica,Arial,sans-serif}
 @media (max-width:900px){
-  #stage{position:relative;width:100vw;height:62vh}
+  #stage{position:relative;width:100vw;height:60vh}
   #story{margin-left:0;width:100vw;padding:0 7vw}
-  #readout{left:auto;right:16px;width:200px}
+  #masthead h1{font-size:32px}
+  #readout{left:auto;right:14px;bottom:14px;width:196px}
+  #stage ~ #readout.enabled{opacity:1;transform:none}
 }
 </style>
 </head>
@@ -60,23 +90,23 @@ body{background:var(--paper);color:var(--ink);
 
 <div id="stage"><svg id="canvas"></svg></div>
 <div id="legend"></div>
-<div id="readout"><h4>READOUT</h4><div id="readout-body"></div></div>
+<div id="readout"><div id="readout-body"></div></div>
 
 <div id="story">
   <div id="masthead">
-    <div class="kicker">MUSA 650 &nbsp;·&nbsp; PHILADELPHIA, DETROIT, ATLANTA</div>
-    <h1>CAN A 30 METRE PIXEL SEE BLIGHT?</h1>
-    <p>Cities run demolition programmes on fixed budgets and land banks with waiting
-       lists. A citywide map of accelerating decline would be useful to them, and
-       satellites are the obvious place to look. This is what happened when I looked.</p>
-    <p style="color:var(--mute)">Scroll.</p>
+    <div class="kicker">MUSA 6500 &nbsp;·&nbsp; DEEP LEARNING WITH PYTHON</div>
+    <h1>Detecting urban decay and new development from Landsat</h1>
+    <p class="sub">Philadelphia, Detroit and Atlanta, 2015–2025. A U-Net labels every 30-metre
+       pixel of land-cover change, and the result is tested against the city's own record of
+       blight — 311 reports and demolition permits.</p>
+    <p class="sub" style="color:var(--mute)">Scroll to begin.</p>
   </div>
   <div id="steps"></div>
   <div id="colophon">
-    Landsat Collection 2 surface reflectance via Microsoft Planetary Computer.
-    Land cover from USGS Annual NLCD Collection 1.2. Municipal, tract and road
-    geometry from US Census TIGER/Line 2024. Vacancy, demolition permits and 311
-    records from the City of Philadelphia. 30 m resolution, 2015 to 2025.
+    Landsat Collection 2 surface reflectance via Microsoft Planetary Computer. Land cover
+    from USGS Annual NLCD Collection 1.2. Municipal, tract and road geometry from US Census
+    TIGER/Line 2024. Vacancy, demolition permits and 311 records from the City of
+    Philadelphia. Basemap © OpenStreetMap contributors, © CARTO. 30 m resolution, 2015 to 2025.
   </div>
 </div>
 
@@ -84,133 +114,139 @@ body{background:var(--paper);color:var(--ink);
 const C = {paper:"#f1f2e0", ink:"#381f04", mute:"#5a544c", white:"#ffffff",
            sand:"#dfd78b", gold:"#dfad10", lime:"#bad012", umber:"#68542d",
            furniture:"#c9c4ab",
-           city:{Philadelphia:"#dfd78b", Detroit:"#9ab0a6", Atlanta:"#acd2d6"},
+           city:{Philadelphia:"#c9a227", Detroit:"#7f9a8c", Atlanta:"#5fa6ad"},
            cls:{"new development":"#bad012", decay:"#dfad10"},
-           ramp:["#ffffff","#dfd78b","#dfad10","#68542d","#381f04"]};
+           ramp:["#f4f2df","#dfd78b","#dfad10","#a17d2a","#5a3d10"]};
+const HELV = "'Helvetica Neue',Helvetica,Arial,sans-serif";
 
 const SCENES = [
+ {id:"method", type:"infographic",
+  title:"Two classes of land-cover change",
+  body:["Two processes leave a fingerprint on satellite imagery. <b>New development</b> —"+
+        " sprawl — is open or low-density land turning built. <b>Decay</b> is the reverse:"+
+        " already-built land losing intensity as lots empty out.",
+        "We label every 30-metre pixel from Landsat in 2015 and again in 2025, then ask the"+
+        " question that matters — does what the satellite calls decay line up with where"+
+        " Philadelphia records blight, in 311 calls and demolition permits?"]},
+
+ {id:"area", type:"chart", chart:"area",
+  title:"Detected change area by city and class",
+  body:["Detected change, city by city. Decay dwarfs new development everywhere — roughly"+
+        " <b>6×</b> in Philadelphia, <b>31×</b> in Detroit, <b>42×</b> in Atlanta.",
+        "Read the big numbers with care. One preprocessing choice moved Detroit's figure by"+
+        " a factor of seven: standardising each city by its own channel statistics cut its"+
+        " detected decay from 135 km² to 18.5."]},
+
  {id:"open", type:"map", city:"Philadelphia", layers:["detected|decay"],
-  title:"THIS IS WHAT THE SATELLITE CALLS DECAY",
-  body:["A U-Net reads eighteen channels of Landsat reflectance from 2015 and 2025 and "+
-        "labels every 30 metre pixel inside the city. Gold is decay, meaning a developed "+
-        "pixel that lost intensity over the decade.",
-        "Two point one seven square kilometres of Philadelphia, scattered along the "+
-        "river and the southern edge."]},
+  title:"Detected decay, Philadelphia",
+  body:["About <b>2.2 km²</b> flagged as decay, threaded along the Delaware and out toward"+
+        " the low-density southwest around Eastwick.",
+        "Hover the map to read the city's totals."]},
 
  {id:"detroit", type:"map", city:"Detroit", layers:["detected|decay","detected|new development"],
-  title:"DETROIT, THE SAME MODEL, UNTOUCHED",
-  body:["The network trained on Philadelphia is applied to Detroit without retraining. "+
-        "Eighteen point four nine square kilometres of decay against zero point five nine "+
-        "of new development.",
-        "That ratio, thirty to one, is what a shrinking city looks like from orbit."]},
+  title:"Model transfer to Detroit",
+  body:["Applied to Detroit without a single epoch of retraining: <b>18.5 km²</b> of decay"+
+        " against 0.6 of new development.",
+        "Thirty-to-one is what a shrinking city looks like from orbit."]},
 
  {id:"atlanta", type:"map", city:"Atlanta", layers:["detected|decay","detected|new development"],
-  title:"ATLANTA, WHERE GROWTH HAPPENS SOMEWHERE ELSE",
-  body:["Ten point one nine square kilometres of decay, zero point two four of new "+
-        "development. Atlanta is growing hard, but in Cobb and Gwinnett and Forsyth, "+
-        "outside the city line this study never crosses.",
-        "Inside the boundary, new development means infill. It is named accordingly."]},
+  title:"Model transfer to Atlanta",
+  body:["<b>10.2 km²</b> of decay, 0.24 of new development. Atlanta is booming — in Cobb,"+
+        " Gwinnett and Forsyth, beyond the city line this study never crosses.",
+        "Inside the boundary, growth means scattered infill, and it is named accordingly."]},
 
  {id:"trajectory", type:"chart", chart:"trajectory",
-  title:"ONLY ONE CITY IS ACTUALLY THINNING",
-  body:["Developed area inside city limits barely moves anywhere, at most one percent "+
-        "over ten years. All three are built out.",
-        "Intensity is the real signal. Following the pixels that were developed in 2015, "+
-        "Detroit loses 0.024 of a class step while Philadelphia and Atlanta gain slightly. "+
-        "The decline is monotonic to 2022, then flat."]},
+  title:"Developed-intensity trajectory, 2015–2025",
+  body:["Developed area barely moves anywhere — at most a percent over ten years. All three"+
+        " are built out, so <b>intensity</b> is the real signal.",
+        "Following 2015's developed pixels, Detroit loses 0.024 of a class step while"+
+        " Philadelphia and Atlanta edge up. The decline runs to 2022, then flattens."]},
 
  {id:"observed", type:"map", city:"Philadelphia", layers:["observed|decay","observed|new development"],
-  title:"HERE IS THE TRUTH ON HELD-OUT GROUND",
-  body:["Training and test patches come from a checkerboard of 256 pixel blocks, so no "+
-        "test patch shares an edge with a training patch. Without that, a 30 metre raster "+
-        "will happily report skill that does not exist.",
-        "These are the labels on blocks the network never saw."]},
+  title:"Observed labels on held-out blocks",
+  body:["Train and test patches come from a 256-pixel checkerboard, so no test block shares"+
+        " an edge with a training block. Skip that and a 30-metre raster will happily report"+
+        " skill that isn't there.",
+        "These are the true labels on held-out ground."]},
 
  {id:"detected", type:"map", city:"Philadelphia",
   layers:["detected-holdout|decay","detected-holdout|new development"],
-  title:"AND HERE IS WHAT IT GUESSED",
-  body:["Same blocks, model output. It finds the big clusters in the south and along the "+
-        "northeast river and misses most of the rest.",
-        "Precision on decay is 0.09 against a recall of 0.12. Nine out of ten flagged "+
-        "pixels are wrong. This is stated, not buried."]},
+  title:"Model predictions on held-out blocks",
+  body:["Same blocks, model output. It catches the big clusters in the south and along the"+
+        " northeast riverfront and misses most of the rest.",
+        "Precision on decay is <b>0.09</b> at a recall of 0.12 — nine of ten flagged pixels"+
+        " are wrong. Stated, not buried."]},
 
  {id:"ap", type:"chart", chart:"ap",
-  title:"BUT IT DOES BEAT A DUMB BASELINE",
-  body:["The null model is a difference in the vegetation index on developed pixels. "+
-        "If the network cannot beat that, the convnet is decoration.",
-        "On decay it wins in Philadelphia, 0.061 against 0.026, and in Detroit, 0.034 "+
-        "against 0.022. It loses in Atlanta by a hair. On new development the null wins "+
-        "everywhere, which is why new development is reported here and not modelled."]},
+  title:"Average precision vs. spectral baseline",
+  body:["The null model is a plain change in the vegetation index. If the network can't"+
+        " clear that bar, the convnet is decoration.",
+        "On decay it wins in Philadelphia (<b>0.061</b> vs 0.026) and Detroit (0.034 vs"+
+        " 0.022), and loses Atlanta by a hair. On new development the null wins everywhere —"+
+        " which is why new development is reported, not modelled."]},
 
  {id:"pr", type:"chart", chart:"pr",
-  title:"WHERE THAT SKILL ACTUALLY SITS",
-  body:["Dashed lines are class prevalence, the score you get by guessing. A curve is "+
-        "only informative above its own dashed line.",
-        "Philadelphia holds precision above the floor out to about forty percent recall. "+
-        "Everything else collapses almost immediately."]},
-
- {id:"area", type:"chart", chart:"area",
-  title:"THREE CITIES, THREE REGIMES",
-  body:["Detected area by city and class. Philadelphia 0.34 against 2.17, Detroit 0.59 "+
-        "against 18.49, Atlanta 0.24 against 10.19.",
-        "One preprocessing choice moved Detroit's number by a factor of seven. Standardising "+
-        "each city by its own channel statistics rather than Philadelphia's cut predicted "+
-        "decay from 134.7 square kilometres to 18.5. Detroit's 2025 composite rests on "+
-        "27 scenes against 5 in 2015."]},
+  title:"Precision–recall, decay class",
+  body:["Dashed lines mark class prevalence — the score you'd get by guessing. A curve only"+
+        " means anything above its own dashed floor.",
+        "Only Philadelphia holds precision above the line, out to about 40% recall. The"+
+        " transfer cities collapse almost immediately."]},
 
  {id:"tract-sat", type:"tract", layer:"U-Net detection density",
-  title:"NOW AGGREGATE IT TO CENSUS TRACTS",
-  body:["Detected decay per square kilometre of land, in quintiles, across 408 "+
-        "Philadelphia tracts. Hover any tract.",
-        "Hold this pattern in your head. The next map is the same city."]},
+  title:"Detected decay by census tract",
+  body:["Detected decay per km², in quintiles across <b>408</b> Philadelphia tracts. The"+
+        " satellite lights up the low-density edges — the far Northeast, the southwest, the"+
+        " riverfront industrial land.",
+        "Hold this pattern in mind. The next map is the same city."]},
 
  {id:"tract-311", type:"tract", layer:"311 vacancy density",
-  title:"THIS IS WHERE THE CITY GETS PHONE CALLS",
-  body:["298,608 service requests from 2015 to 2025 naming vacancy, abandonment or "+
-        "dangerous conditions. Same geography, same bins, completely different map.",
-        "The Spearman correlation between the two is −0.269, and −0.220 after "+
-        "controlling for how much building each tract contains."]},
+  title:"311 vacancy reports by census tract",
+  body:["<b>298,608</b> service requests naming vacancy, abandonment or dangerous conditions,"+
+        " 2015–2025. They cluster in the dense rowhouse core of North Philadelphia —"+
+        " Kensington, Fairhill, Strawberry Mansion. A different map entirely.",
+        "Spearman with detected decay: <b>−0.269</b>, and −0.220 after controlling for how"+
+        " much building each tract holds."]},
 
  {id:"tract-permits", type:"tract", layer:"demolition permits density",
-  title:"AND THIS IS WHERE BUILDINGS ACTUALLY CAME DOWN",
-  body:["11,209 demolition permits. This is the closest record to the physical event the "+
-        "decay class claims to detect.",
-        "Against permits, the raw NLCD label correlates at −0.065, and at −0.018 once "+
-        "built area is controlled for. That is no relationship at all."]},
+  title:"Demolition permits by census tract",
+  body:["<b>11,209</b> demolition permits — the closest record we have to the physical event"+
+        " the decay class claims to detect.",
+        "Correlation with detected decay: −0.151; with the raw NLCD label, just <b>−0.065</b>,"+
+        " essentially nothing."]},
 
  {id:"scatter", type:"chart", chart:"scatter",
-  title:"THE ORDERING IS THE FINDING",
-  body:["As the record gets closer to a demolition event, the correlation walks toward "+
-        "zero. The satellite is not pointing at the opposite of blight. It is failing to "+
-        "register demolition, full stop.",
-        "The strong negatives against 311 come from a confound. Satellite-detected change "+
-        "sits on the low density edge; phone calls come from dense neighbourhoods with "+
-        "many households per square kilometre."]},
+  title:"Detected decay against 311 reports",
+  body:["Each dot is a tract: detected decay against 311 vacancy calls. The cloud tilts the"+
+        " wrong way, and it tilts harder the closer the record sits to a real demolition.",
+        "Part of it is a confound — calls come from dense neighbourhoods, satellite change"+
+        " from the sparse edge. But the satellite still isn't registering demolition at all."]},
 
  {id:"scale", type:"chart", chart:"scale",
-  title:"AND IT IS NOT AN ARTEFACT OF THE GRID",
-  body:["Any aggregated spatial statistic can be accused of depending on the units. So "+
-        "the whole thing is recomputed at six cell sizes from 90 metres to 2.4 kilometres.",
+  title:"Correlation across aggregation scales",
+  body:["Any aggregated spatial statistic can be blamed on the grid. So the whole thing is"+
+        " recomputed at six cell sizes, 90 metres to 2.4 kilometres.",
         "The sign never flips, and controlling for built area never rescues it."]},
 
  {id:"why", type:"map", city:"Philadelphia", layers:["detected|decay"],
-  title:"A ROWHOUSE IS A TENTH OF A PIXEL",
-  body:["A Philadelphia rowhouse is roughly four to five metres wide. Its footprint is "+
-        "about a tenth of a 30 metre pixel. Demolish one and the block is still standing, "+
-        "still paved, still returning the same reflectance.",
-        "What does move a pixel is a low density parcel near the edge of the city going "+
-        "to seed. That is a real land cover transition. It is not blight in the sense a "+
-        "housing inspector means it.",
-        "A city that targets demolition using 30 metre land cover change will not get a "+
-        "weak signal that improves with more data. It will get a signal about a different "+
-        "process, and it will send resources away from the blocks where recorded need is "+
-        "highest."]}
+  title:"Interpretation: change below pixel scale",
+  body:["A Philadelphia rowhouse is four to five metres wide — about a tenth of a 30-metre"+
+        " pixel. Demolish one and the block still stands, still paved, still returning the"+
+        " same reflectance.",
+        "What does move a pixel is a sparse edge parcel going to seed: a real land-cover"+
+        " change, but not blight in the sense a housing inspector means.",
+        "Target demolition with 30-metre land cover and you won't get a weak signal that"+
+        " sharpens with more data. You'll get a signal about a different process — and send"+
+        " crews away from the blocks with the most recorded need."]}
 ];
 
 const svg = d3.select("#canvas");
-const gRoads = svg.append("g"), gTracts = svg.append("g"),
-      gOverlay = svg.append("g"), gBounds = svg.append("g"),
-      gChart = svg.append("g").attr("class","chart");
+const gBasemap = svg.append("g").attr("id","basemap"),
+      gTracts  = svg.append("g"),
+      gOverlay = svg.append("g").attr("id","overlay"),
+      gLabels  = svg.append("g").attr("id","labels"),
+      gBounds  = svg.append("g").attr("id","bounds"),
+      gChart   = svg.append("g").attr("class","chart");
+const MAP_LAYERS = [gBasemap,gTracts,gOverlay,gLabels,gBounds];
 let W = 0, H = 0, DATA = {}, current = null, view = null;
 
 function size(){
@@ -220,13 +256,15 @@ function size(){
 }
 window.addEventListener("resize", () => { size(); if(current) render(current, false); });
 
+/* readout pops out only while the pointer is over the map */
+const stageEl = document.getElementById("stage");
+
 Promise.all([
   d3.json("data/boundaries.geojson"),
-  d3.json("data/roads.geojson"),
   d3.json("data/tracts.geojson"),
   d3.json("data/stats.json")
-]).then(([bounds, roads, tracts, stats]) => {
-  DATA = {bounds, roads, tracts, stats};
+]).then(([bounds, tracts, stats]) => {
+  DATA = {bounds, tracts, stats};
   DATA.tractById = new Map(stats.tracts.map(d => [String(d.GEOID), d]));
   size();
   buildSteps();
@@ -240,7 +278,7 @@ function buildSteps(){
     const step = host.append("div").attr("class","step").attr("data-i", i);
     step.append("div").attr("class","kicker").text(String(i+1).padStart(2,"0"));
     step.append("h2").text(s.title);
-    s.body.forEach(t => step.append("p").text(t));
+    s.body.forEach(t => step.append("p").html(t));
   });
 }
 
@@ -262,49 +300,83 @@ function observe(){
 function frameFor(city){
   const feature = {type:"FeatureCollection",
     features: DATA.bounds.features.filter(f => f.properties.city === city)};
-  const p = d3.geoMercator().fitExtent([[52,52],[W-52,H-52]], feature);
+  const p = d3.geoMercator().fitExtent([[54,54],[W-54,H-54]], feature);
   return {center: p.invert([W/2, H/2]), scale: p.scale()};
 }
-
 function projectionFrom(v){
   return d3.geoMercator().center(v.center).scale(v.scale).translate([W/2, H/2]);
 }
-
-function flyTo(target, animate, draw){
-  if(!view || !animate){ view = target; draw(projectionFrom(view)); return; }
+function flyTo(target, animate, drawFrame, onSettle){
+  if(!view || !animate){
+    view = target; const p = projectionFrom(view);
+    drawFrame(p); onSettle(p); return;
+  }
+  gBasemap.interrupt().attr("opacity",0);
+  gLabels.interrupt().attr("opacity",0);
   const from = view, iC = d3.interpolate(from.center, target.center),
         iS = d3.interpolate(from.scale, target.scale);
   const t = d3.timer(elapsed => {
     const k = d3.easeCubicInOut(Math.min(1, elapsed / 950));
     view = {center: iC(k), scale: iS(k)};
-    draw(projectionFrom(view));
-    if(k === 1) t.stop();
+    const p = projectionFrom(view);
+    drawFrame(p);
+    if(k === 1){ t.stop(); onSettle(p); }
   });
 }
 
-/* ---------- renderers ---------- */
+/* ---------- web-mercator tile basemap ---------- */
+
+function drawBasemap(projection){
+  if(typeof d3.tile !== "function") return;
+  const k = projection.scale() * 2 * Math.PI;
+  const tiles = d3.tile().size([W,H]).scale(k).translate(projection([0,0]))();
+  if(!tiles.length || !isFinite(tiles.scale)) return;
+  const px = (window.devicePixelRatio > 1) ? "@2x" : "";
+  const sub = d => "abcd"[(d.x*7 + d.y) & 3];
+  const key = d => d.z + "/" + d.x + "/" + d.y;
+  const place = sel => sel
+    .attr("x", d => Math.round((d.x + tiles.translate[0]) * tiles.scale))
+    .attr("y", d => Math.round((d.y + tiles.translate[1]) * tiles.scale))
+    .attr("width",  Math.ceil(tiles.scale))
+    .attr("height", Math.ceil(tiles.scale));
+  const url = (style,d) =>
+    `https://${sub(d)}.basemaps.cartocdn.com/${style}/${d.z}/${d.x}/${d.y}${px}.png`;
+
+  gBasemap.style("display",null).selectAll("image").data(tiles, key)
+    .join("image").attr("href", d => url("light_nolabels", d)).call(place);
+  gLabels.style("display",null).selectAll("image").data(tiles, key)
+    .join("image").attr("href", d => url("light_only_labels", d)).call(place);
+
+  gBasemap.transition().duration(500).attr("opacity",1);
+  gLabels.transition().duration(500).attr("opacity",1);
+}
+
+/* ---------- render dispatch ---------- */
 
 function render(scene, animate){
   current = scene;
-  const isChart = scene.type === "chart";
-  gChart.style("display", isChart ? null : "none");
-  [gRoads,gTracts,gOverlay,gBounds].forEach(g => g.style("display", isChart ? "none" : null));
-  if(isChart){ gChart.selectAll("*").remove(); CHARTS[scene.chart](); legendFor(scene); return; }
+  const isFlat = scene.type === "chart" || scene.type === "infographic";
+  gChart.style("display", isFlat ? null : "none");
+  MAP_LAYERS.forEach(g => g.style("display", isFlat ? "none" : null));
+  d3.select("#readout").classed("enabled", !isFlat);
 
+  if(isFlat){
+    gChart.selectAll("*").interrupt(); gChart.selectAll("*").remove();
+    (scene.type === "infographic" ? INFOGRAPHIC : CHARTS[scene.chart])();
+    legendFor(scene);
+    return;
+  }
   const city = scene.type === "tract" ? "Philadelphia" : scene.city;
-  flyTo(frameFor(city), animate, path => drawMap(scene, city, path));
+  flyTo(frameFor(city), animate,
+        p => drawMapVectors(scene, city, p),
+        p => drawBasemap(p));
   legendFor(scene);
-  readoutCity(city);
+  if(scene.type === "tract") readoutHint("Hover any tract");
+  else readoutCity(city);
 }
 
-function drawMap(scene, city, projection){
+function drawMapVectors(scene, city, projection){
   const path = d3.geoPath(projection);
-
-  const roads = DATA.roads.features.filter(f => f.properties.city === city);
-  gRoads.selectAll("path").data(roads).join("path")
-    .attr("d", path).attr("fill","none")
-    .attr("stroke", C.furniture)
-    .attr("stroke-width", d => d.properties.MTFCC === "S1400" ? 0.4 : 0.9);
 
   if(scene.type === "tract"){
     const values = DATA.tracts.features
@@ -317,9 +389,11 @@ function drawMap(scene, city, projection){
 
     gTracts.selectAll("path").data(DATA.tracts.features).join("path")
       .attr("d", path)
+      .attr("fill-opacity", .82)
       .attr("stroke", C.mute).attr("stroke-width", 0.4)
+      .style("cursor","crosshair")
       .on("mousemove", (e,f) => readoutTract(f.properties.GEOID))
-      .transition().duration(600)
+      .transition().duration(650).ease(d3.easeCubicOut)
       .attr("fill", f => {
         const row = DATA.tractById.get(String(f.properties.GEOID));
         return colour(row ? +row[scene.layer] : 0);
@@ -334,8 +408,8 @@ function drawMap(scene, city, projection){
 
     gOverlay.selectAll("image").data(items, d => d.key).join(
       enter => enter.append("image").attr("opacity", 0),
-      update => update, exit => exit.transition().duration(400)
-        .attr("opacity", 0).remove())
+      update => update,
+      exit => exit.transition().duration(400).attr("opacity", 0).remove())
       .attr("href", d => d.file)
       .attr("preserveAspectRatio","none")
       .each(function(d){
@@ -356,26 +430,67 @@ function drawMap(scene, city, projection){
 
 function legendFor(scene){
   const host = d3.select("#legend").html("");
+  const title = t => host.append("div").attr("class","ttl").text(t);
+  const swatchRow = (color,label) => {
+    const r = host.append("div");
+    r.append("span").attr("class","swatch").style("background",color);
+    r.append("span").text(label);
+  };
+  const dotRow = (color,label,hollow) => {
+    const r = host.append("div");
+    r.append("span").attr("class","dot")
+      .style("background", hollow ? C.white : color)
+      .style("border-color", color==="#ffffff" ? C.ink : color);
+    r.append("span").text(label);
+  };
+  const ruleRow = (color,label,dash) => {
+    const r = host.append("div");
+    r.append("span").attr("class","rule"+(dash?" dash":"")).style("border-top-color",color);
+    r.append("span").text(label);
+  };
+
   if(scene.type === "tract"){
-    host.append("div").style("margin-bottom","6px").text(scene.layer.toUpperCase());
-    ["LOWEST FIFTH","SECOND","THIRD","FOURTH","HIGHEST FIFTH"].forEach((t,i) => {
-      const row = host.append("div");
-      row.append("span").attr("class","swatch").style("background", C.ramp[i]);
-      row.append("span").text(t);
-    });
+    title(scene.layer.toUpperCase());
+    ["LOWEST FIFTH","SECOND","THIRD","FOURTH","HIGHEST FIFTH"].forEach((t,i)=>swatchRow(C.ramp[i],t));
   } else if(scene.type === "map"){
-    (scene.layers || []).forEach(key => {
+    title("DETECTED CLASS");
+    (scene.layers||[]).forEach(key => {
       const cls = key.split("|")[1];
-      const row = host.append("div");
-      row.append("span").attr("class","swatch").style("background", C.cls[cls]);
-      row.append("span").text(cls.toUpperCase());
+      swatchRow(C.cls[cls], cls.toUpperCase());
     });
-    const road = host.append("div");
-    road.append("span").attr("class","rule");
-    road.append("span").text("STREET NETWORK");
+  } else if(scene.type === "infographic"){
+    title("CLASSES");
+    swatchRow(C.cls["new development"],"NEW DEVELOPMENT");
+    swatchRow(C.cls.decay,"DECAY");
+  } else if(scene.chart === "area"){
+    title("AREA DETECTED");
+    dotRow(C.cls.decay,"DECAY");
+    dotRow(C.cls["new development"],"NEW DEVELOPMENT");
+  } else if(scene.chart === "ap"){
+    title("AVERAGE PRECISION, DECAY");
+    dotRow(C.white,"SPECTRAL NULL",true);
+    dotRow(C.gold,"U-NET, GLOBAL");
+    dotRow(C.umber,"U-NET, PER-CITY");
+  } else if(scene.chart === "trajectory" || scene.chart === "pr"){
+    title(scene.chart === "pr" ? "PRECISION–RECALL, DECAY" : "MEAN INTENSITY CHANGE");
+    ["Philadelphia","Detroit","Atlanta"].forEach(c=>ruleRow(C.city[c],c.toUpperCase()));
+    if(scene.chart==="pr") ruleRow(C.mute,"PREVALENCE (CHANCE)",true);
+  } else if(scene.chart === "scatter"){
+    title("DETECTED DECAY, QUINTILE");
+    ["LOW","","MID","","HIGH"].forEach((t,i)=>{ if(t) dotRow(C.ramp[i],t); });
+    ruleRow(C.ink,"LINEAR FIT");
+  } else if(scene.chart === "scale"){
+    title("SPEARMAN vs DETECTED DECAY");
+    ruleRow(C.umber,"311 VACANCY");
+    ruleRow(C.mute,"VACANT BUILDINGS");
+    ruleRow(C.gold,"DEMOLITION PERMITS");
+    ruleRow(C.ink,"— SOLID RAW  ·  DASH PARTIAL",false);
   }
 }
 
+function readoutHint(text){
+  d3.select("#readout-body").html('<div class="hint">'+text+'</div>');
+}
 function readoutTract(geoid){
   const row = DATA.tractById.get(String(geoid));
   if(!row) return;
@@ -385,68 +500,268 @@ function readoutTract(geoid){
       '</span><span>' + d3.format(",.1f")(+row[k]) + '</span></div>'));
   d3.select("#readout-body").html(html.join(""));
 }
-
 function readoutCity(city){
   const r = DATA.stats.regime.find(d => d.city === city);
-  if(!r) return;
+  if(!r){ readoutHint("Hover the map"); return; }
   const nd = r["predicted_km2_new development"], dc = r["predicted_km2_decay"];
   d3.select("#readout-body").html(
     '<h4>' + city.toUpperCase() + '</h4>' +
     '<div class="row"><span>NEW DEVELOPMENT</span><span>' + d3.format(".2f")(nd) + ' km²</span></div>' +
     '<div class="row"><span>DECAY</span><span>' + d3.format(".2f")(dc) + ' km²</span></div>' +
-    '<div class="row"><span>RATIO</span><span>' + d3.format(".3f")(nd/dc) + '</span></div>');
+    '<div class="row"><span>DECAY : NEW DEV</span><span>' + d3.format(".1f")(dc/nd) + ' : 1</span></div>');
 }
 
-/* ---------- charts ---------- */
+/* ---------- chart scaffolding ---------- */
 
-const M = {top:70, right:40, bottom:78, left:150};
-function panel(){ return {w: W - M.left - M.right, h: H - M.top - M.bottom,
-                          g: gChart.append("g").attr("transform",`translate(${M.left},${M.top})`)}; }
-function axes(g,w,h,x,y,xl,yl){
-  g.append("g").attr("class","axis").attr("transform",`translate(0,${h})`).call(d3.axisBottom(x).ticks(6));
-  g.append("g").attr("class","axis").call(d3.axisLeft(y).ticks(6));
-  if(xl) g.append("text").attr("class","label").attr("x", w/2).attr("y", h+52).attr("text-anchor","middle").text(xl);
+const M = {top:74, right:44, bottom:80, left:150};
+function panel(){
+  const left = Math.min(M.left, W*0.24);
+  return {w: W - left - M.right, h: H - M.top - M.bottom,
+          g: gChart.append("g").attr("transform",`translate(${left},${M.top})`), left};
+}
+function gridX(g,x,h){ g.append("g").attr("class","grid").attr("transform",`translate(0,${h})`)
+  .call(d3.axisBottom(x).ticks(6).tickSize(-h).tickFormat("")); }
+function gridY(g,y,w){ g.append("g").attr("class","grid")
+  .call(d3.axisLeft(y).ticks(6).tickSize(-w).tickFormat("")); }
+function axes(g,w,h,x,y,xl,yl,noYAxis,xfmt){
+  const bottom = d3.axisBottom(x).ticks(6);
+  if(xfmt) bottom.tickFormat(xfmt);
+  g.append("g").attr("class","axis").attr("transform",`translate(0,${h})`).call(bottom);
+  if(!noYAxis) g.append("g").attr("class","axis").call(d3.axisLeft(y).ticks(6));
+  if(xl) g.append("text").attr("class","label").attr("x", w/2).attr("y", h+52)
+          .attr("text-anchor","middle").text(xl);
   if(yl) g.append("text").attr("class","label").attr("transform","rotate(-90)")
           .attr("x", -h/2).attr("y", -74).attr("text-anchor","middle").text(yl);
 }
 
+/* ---------- infographic: what we measure and how ---------- */
+
+function INFOGRAPHIC(){
+  const g = gChart.append("g");
+  const pad = Math.max(40, W*0.08);
+  const cx = W/2;
+  const reveal = (sel,delay) => sel.attr("opacity",0)
+      .transition().delay(delay).duration(650).ease(d3.easeCubicOut).attr("opacity",1);
+
+  // ---- A. two kinds of change (before/after pixel pairs) ----
+  const topY = H*0.10;
+  g.append("text").attr("x",cx).attr("y",topY).attr("text-anchor","middle")
+    .style("font-size","13px").attr("fill",C.mute)
+    .call(s=>reveal(s,0)).text("TWO KINDS OF CHANGE, ONE DECADE APART");
+
+  const cell = Math.min(46, W*0.07);
+  const pairY = topY + cell*0.9;
+  function pair(cx0, from, to, accent, name, note){
+    const grp = g.append("g");
+    const gap = cell*1.5, arrow = cell*0.9;
+    const x0 = cx0 - (cell + arrow/2 + gap/2 + cell/2);
+    // 2015
+    grp.append("rect").attr("x",x0).attr("y",pairY).attr("width",cell).attr("height",cell)
+      .attr("fill",from).attr("stroke",C.ink).attr("stroke-width",2);
+    grp.append("text").attr("x",x0+cell/2).attr("y",pairY-8).attr("text-anchor","middle")
+      .style("font-size","10px").attr("fill",C.mute).attr("font-family",HELV).text("2015");
+    // arrow
+    const ax = x0+cell+gap*0.35;
+    grp.append("path").attr("d",`M${ax},${pairY+cell/2} h${arrow}`)
+      .attr("stroke",accent).attr("stroke-width",3).attr("marker-end","url(#arw)");
+    // 2025
+    const x1 = ax+arrow+gap*0.35;
+    grp.append("rect").attr("x",x1).attr("y",pairY).attr("width",cell).attr("height",cell)
+      .attr("fill",to).attr("stroke",C.ink).attr("stroke-width",2);
+    grp.append("text").attr("x",x1+cell/2).attr("y",pairY-8).attr("text-anchor","middle")
+      .style("font-size","10px").attr("fill",C.mute).attr("font-family",HELV).text("2025");
+    // labels
+    grp.append("text").attr("x",cx0).attr("y",pairY+cell+26).attr("text-anchor","middle")
+      .style("font-size","13px").attr("fill",C.ink).text(name);
+    grp.append("text").attr("x",cx0).attr("y",pairY+cell+44).attr("text-anchor","middle")
+      .style("font-size","11px").attr("fill",C.mute).attr("font-family",HELV).text(note);
+    return grp;
+  }
+  // arrow marker
+  const defs = g.append("defs");
+  defs.append("marker").attr("id","arw").attr("viewBox","0 0 10 10")
+    .attr("refX",8).attr("refY",5).attr("markerWidth",6).attr("markerHeight",6)
+    .attr("orient","auto-start-reverse").append("path")
+    .attr("d","M0,0 L10,5 L0,10 z").attr("fill",C.ink);
+
+  reveal(pair(cx - W*0.20, C.ramp[1], C.ramp[3], C.cls["new development"],
+              "NEW DEVELOPMENT", "open land → built  (sprawl)"), 200);
+  reveal(pair(cx + W*0.20, C.ramp[4], C.ramp[2], C.cls.decay,
+              "DECAY", "built land → dimmed  (blight)"), 380);
+
+  // ---- B. the pipeline ----
+  const midY = H*0.46;
+  g.append("text").attr("x",cx).attr("y",midY-6).attr("text-anchor","middle")
+    .style("font-size","13px").attr("fill",C.mute).call(s=>reveal(s,560))
+    .text("HOW THE SATELLITE MAP IS MADE");
+
+  const boxW = Math.min(150, W*0.24), boxH = 52, y2 = midY+16;
+  const steps = [
+    {t:"LANDSAT", s:"2015 & 2025 · 18 channels", fill:C.white},
+    {t:"U-NET", s:"3 levels · 40 epochs", fill:C.sand},
+    {t:"3 CLASSES", s:"no change / new dev / decay", fill:C.white}
+  ];
+  const totalW = boxW*3 + Math.min(70,W*0.09)*2;
+  let bx = cx - totalW/2;
+  steps.forEach((st,i)=>{
+    const grp = g.append("g");
+    grp.append("rect").attr("x",bx).attr("y",y2).attr("width",boxW).attr("height",boxH)
+      .attr("fill",st.fill).attr("stroke",C.ink).attr("stroke-width",2.4)
+      .attr("rx",2);
+    grp.append("text").attr("x",bx+boxW/2).attr("y",y2+22).attr("text-anchor","middle")
+      .style("font-size","13px").text(st.t);
+    grp.append("text").attr("x",bx+boxW/2).attr("y",y2+40).attr("text-anchor","middle")
+      .style("font-size","10px").attr("fill",C.mute).attr("font-family",HELV).text(st.s);
+    reveal(grp, 700 + i*180);
+    if(i<2){
+      const gapW = (totalW - boxW*3)/2;
+      const a = g.append("path")
+        .attr("d",`M${bx+boxW},${y2+boxH/2} h${gapW}`)
+        .attr("stroke",C.ink).attr("stroke-width",2.4).attr("marker-end","url(#arw)");
+      reveal(a, 790 + i*180);
+    }
+    bx += boxW + Math.min(70,W*0.09);
+  });
+
+  // ---- C. validation ----
+  const botY = H*0.74;
+  const vline = g.append("path")
+    .attr("d",`M${cx},${y2+boxH} v${botY-(y2+boxH)-14}`)
+    .attr("stroke",C.ink).attr("stroke-width",2.4)
+    .attr("stroke-dasharray","2 5").attr("marker-end","url(#arw)");
+  reveal(vline, 1300);
+  g.append("text").attr("x",cx).attr("y",botY-2).attr("text-anchor","middle")
+    .style("font-size","13px").attr("fill",C.mute).call(s=>reveal(s,1400))
+    .text("CHECK IT AGAINST WHAT THE CITY RECORDS");
+
+  const chipW = Math.min(160, W*0.26), chipH = 46, y3 = botY+12;
+  const chips = [
+    {t:"311 CALLS", s:"298,608 vacancy reports", fill:C.detroit},
+    {t:"DEMOLITION PERMITS", s:"11,209 buildings removed", fill:C.atlanta}
+  ];
+  const cw = chipW*2 + Math.min(48,W*0.06);
+  let cxx = cx - cw/2;
+  chips.forEach((ch,i)=>{
+    const grp = g.append("g");
+    grp.append("rect").attr("x",cxx).attr("y",y3).attr("width",chipW).attr("height",chipH)
+      .attr("fill",ch.fill).attr("fill-opacity",.5)
+      .attr("stroke",C.ink).attr("stroke-width",2.2).attr("rx",2);
+    grp.append("text").attr("x",cxx+chipW/2).attr("y",y3+20).attr("text-anchor","middle")
+      .style("font-size","12px").text(ch.t);
+    grp.append("text").attr("x",cxx+chipW/2).attr("y",y3+37).attr("text-anchor","middle")
+      .style("font-size","10px").attr("fill",C.mute).attr("font-family",HELV).text(ch.s);
+    reveal(grp, 1500 + i*180);
+    cxx += chipW + Math.min(48,W*0.06);
+  });
+}
+
+/* ---------- charts ---------- */
+
+function linreg(pts){
+  const n = pts.length; let sx=0,sy=0,sxx=0,sxy=0;
+  pts.forEach(p=>{sx+=p.x;sy+=p.y;sxx+=p.x*p.x;sxy+=p.x*p.y;});
+  const b=(n*sxy-sx*sy)/(n*sxx-sx*sx), a=(sy-b*sx)/n; return {a,b};
+}
+
 const CHARTS = {
+
+  /* time series — smooth staggered line draw + popping end markers */
   trajectory(){
     const {w,h,g} = panel(), rows = DATA.stats.trajectory;
     const x = d3.scaleLinear().domain(d3.extent(rows, d=>d.year)).range([0,w]);
     const y = d3.scaleLinear().domain(d3.extent(rows, d=>d.intensity_change)).nice().range([h,0]);
-    axes(g,w,h,x,y,"YEAR","CHANGE IN MEAN INTENSITY SINCE 2015");
+    gridY(g,y,w);
+    axes(g,w,h,x,y,"YEAR","CHANGE IN MEAN INTENSITY SINCE 2015",false,d3.format("d"));
     g.append("line").attr("x1",0).attr("x2",w).attr("y1",y(0)).attr("y2",y(0))
       .attr("stroke",C.ink).attr("stroke-width",2.6);
-    d3.groups(rows, d=>d.city).forEach(([city, vals]) => {
-      const line = d3.line().x(d=>x(d.year)).y(d=>y(d.intensity_change));
-      const p = g.append("path").datum(vals.sort((a,b)=>a.year-b.year))
-        .attr("fill","none").attr("stroke",C.city[city]).attr("stroke-width",3.4).attr("d",line);
+    const line = d3.line().curve(d3.curveCatmullRom.alpha(.6))
+      .x(d=>x(d.year)).y(d=>y(d.intensity_change));
+    d3.groups(rows, d=>d.city).forEach(([city, vals], gi) => {
+      vals.sort((a,b)=>a.year-b.year);
+      const p = g.append("path").datum(vals)
+        .attr("fill","none").attr("stroke",C.city[city])
+        .attr("stroke-width",3.4).attr("stroke-linejoin","round")
+        .attr("stroke-linecap","round").attr("d",line);
       const L = p.node().getTotalLength();
       p.attr("stroke-dasharray",`${L} ${L}`).attr("stroke-dashoffset",L)
-        .transition().duration(1100).attr("stroke-dashoffset",0);
-      g.append("text").attr("class","label").attr("x", x(d3.max(vals,d=>d.year))+8)
-        .attr("y", y(vals[vals.length-1].intensity_change)+4).text(city.toUpperCase());
+        .transition().delay(gi*260).duration(1400).ease(d3.easeCubicInOut)
+        .attr("stroke-dashoffset",0);
+      const last = vals[vals.length-1];
+      g.append("circle").attr("cx",x(last.year)).attr("cy",y(last.intensity_change))
+        .attr("fill",C.city[city]).attr("stroke",C.ink).attr("stroke-width",2).attr("r",0)
+        .transition().delay(gi*260+1400).duration(420).ease(d3.easeBackOut).attr("r",5.5);
+      g.append("text").attr("class","label").attr("x", x(last.year)-12)
+        .attr("y", y(last.intensity_change) + (city==="Detroit"?18:-12)).style("font-size","11px")
+        .attr("text-anchor","end").attr("fill",C.city[city]).attr("opacity",0)
+        .text(city.toUpperCase())
+        .transition().delay(gi*260+1500).duration(400).attr("opacity",1);
     });
   },
 
+  /* NOT a bar chart: dumbbell of new-development vs decay per city */
+  area(){
+    const {w,h,g} = panel(), rows = DATA.stats.regime.slice()
+      .sort((a,b)=>b.predicted_km2_decay-a.predicted_km2_decay);
+    const x = d3.scaleLinear()
+      .domain([0, d3.max(rows,d=>d.predicted_km2_decay)*1.18]).range([0,w]);
+    const y = d3.scaleBand().domain(rows.map(d=>d.city)).range([0,h]).padding(.5);
+    gridX(g,x,h);
+    axes(g,w,h,x,y,"AREA DETECTED, SQUARE KILOMETRES",null,true);
+    rows.forEach((d,i) => {
+      const yc = y(d.city)+y.bandwidth()/2;
+      const nd = d["predicted_km2_new development"], dc = d["predicted_km2_decay"];
+      const conn = g.append("line").attr("x1",x(nd)).attr("x2",x(nd)).attr("y1",yc).attr("y2",yc)
+        .attr("stroke",C.ink).attr("stroke-width",2.4);
+      conn.transition().delay(i*140).duration(750).ease(d3.easeCubicOut).attr("x2",x(dc));
+      // city label
+      g.append("text").attr("class","label").attr("x",-14).attr("y",yc+4)
+        .attr("text-anchor","end").style("font-size","13px").text(d.city.toUpperCase());
+      // new-dev dot
+      g.append("circle").attr("cx",x(nd)).attr("cy",yc).attr("r",0)
+        .attr("fill",C.cls["new development"]).attr("stroke",C.ink).attr("stroke-width",2)
+        .transition().delay(i*140).duration(420).ease(d3.easeBackOut).attr("r",7);
+      // decay dot
+      g.append("circle").attr("cx",x(nd)).attr("cy",yc).attr("r",7)
+        .attr("fill",C.cls.decay).attr("stroke",C.ink).attr("stroke-width",2)
+        .transition().delay(i*140).duration(750).ease(d3.easeCubicOut).attr("cx",x(dc))
+        .transition().duration(300).attr("r",9);
+      // value labels
+      g.append("text").attr("class","label").attr("x",x(dc)+16).attr("y",yc+4)
+        .style("font-size","12px").attr("opacity",0)
+        .text(d3.format(".1f")(dc)+" km²  ·  "+d3.format(".0f")(dc/nd)+"× new dev")
+        .transition().delay(i*140+750).duration(400).attr("opacity",1);
+    });
+  },
+
+  /* NOT a bar chart: Cleveland dot plot, baseline → model, per city */
   ap(){
     const {w,h,g} = panel();
     const models = ["spectral null","u-net global","u-net per-city"];
     const fill = {"spectral null":C.white,"u-net global":C.gold,"u-net per-city":C.umber};
     const rows = DATA.stats.metrics.filter(d => models.includes(d.model));
-    const x = d3.scaleLinear().domain([0, d3.max(rows,d=>d.ap_decay)*1.18]).range([0,w]);
-    const y = d3.scaleBand().domain(DATA.stats.cities).range([0,h]).padding(.28);
-    const sub = d3.scaleBand().domain(models).range([0,y.bandwidth()]).padding(.12);
-    axes(g,w,h,x,y,"AVERAGE PRECISION, DECAY CLASS",null);
-    rows.forEach(d => {
-      g.append("rect").attr("x",0).attr("y", y(d.city)+sub(d.model))
-        .attr("height", sub.bandwidth()).attr("fill", fill[d.model])
-        .attr("stroke",C.ink).attr("stroke-width",2.2)
-        .attr("width",0).transition().duration(800).attr("width", x(d.ap_decay));
-      g.append("text").attr("class","label").attr("x", x(d.ap_decay)+8)
-        .attr("y", y(d.city)+sub(d.model)+sub.bandwidth()/2+4)
-        .style("font-size","11px").text(d3.format(".3f")(d.ap_decay));
+    const byCity = d3.groups(rows, d=>d.city)
+      .sort((a,b)=>d3.max(b[1],d=>d.ap_decay)-d3.max(a[1],d=>d.ap_decay));
+    const x = d3.scaleLinear().domain([0, d3.max(rows,d=>d.ap_decay)*1.22]).range([0,w]);
+    const y = d3.scaleBand().domain(byCity.map(d=>d[0])).range([0,h]).padding(.5);
+    gridX(g,x,h);
+    axes(g,w,h,x,y,"AVERAGE PRECISION, DECAY CLASS",null,true);
+    byCity.forEach(([city, vals], i) => {
+      const yc = y(city)+y.bandwidth()/2;
+      const lo = d3.min(vals,d=>d.ap_decay), hi = d3.max(vals,d=>d.ap_decay);
+      const conn = g.append("line").attr("x1",x(lo)).attr("x2",x(lo)).attr("y1",yc).attr("y2",yc)
+        .attr("stroke",C.mute).attr("stroke-width",2);
+      conn.transition().delay(i*150).duration(700).ease(d3.easeCubicOut).attr("x2",x(hi));
+      g.append("text").attr("class","label").attr("x",-14).attr("y",yc+4)
+        .attr("text-anchor","end").style("font-size","13px").text(city.toUpperCase());
+      vals.forEach((d,j) => {
+        g.append("circle").attr("cx",x(d.ap_decay)).attr("cy",yc).attr("r",0)
+          .attr("fill",fill[d.model]).attr("stroke",C.ink).attr("stroke-width",2)
+          .transition().delay(i*150+120+j*90).duration(420).ease(d3.easeBackOut).attr("r",7);
+      });
+      g.append("text").attr("class","label").attr("x",x(hi)+16).attr("y",yc+4)
+        .style("font-size","12px").attr("opacity",0)
+        .text("best "+d3.format(".3f")(hi))
+        .transition().delay(i*150+700).duration(400).attr("opacity",1);
     });
   },
 
@@ -456,79 +771,103 @@ const CHARTS = {
     const x = d3.scaleLinear().domain([0,1]).range([0,w]);
     const y = d3.scaleLinear().domain([0, d3.max(curves, c => d3.max(c.points, p=>p[1]))])
                 .nice().range([h,0]);
+    gridY(g,y,w);
     axes(g,w,h,x,y,"RECALL","PRECISION, DECAY");
-    curves.forEach(c => {
-      g.append("path").datum(c.points).attr("fill","none")
-        .attr("stroke", C.city[c.city]).attr("stroke-width",3.2)
-        .attr("d", d3.line().x(d=>x(d[0])).y(d=>y(d[1])));
+    curves.forEach((c,i) => {
       g.append("line").attr("x1",0).attr("x2",w)
         .attr("y1",y(c.prevalence)).attr("y2",y(c.prevalence))
-        .attr("stroke", C.city[c.city]).attr("stroke-width",1.4).attr("stroke-dasharray","4 4");
+        .attr("stroke", C.city[c.city]).attr("stroke-width",1.4).attr("stroke-dasharray","4 4")
+        .attr("opacity",.7);
+      const p = g.append("path").datum(c.points).attr("fill","none")
+        .attr("stroke", C.city[c.city]).attr("stroke-width",3.2).attr("stroke-linejoin","round")
+        .attr("d", d3.line().x(d=>x(d[0])).y(d=>y(d[1])));
+      const L = p.node().getTotalLength();
+      p.attr("stroke-dasharray",`${L} ${L}`).attr("stroke-dashoffset",L)
+        .transition().delay(i*220).duration(1200).ease(d3.easeCubicInOut).attr("stroke-dashoffset",0);
+      // AP summary, stacked top-right so the labels never collide with the floors
       const m = DATA.stats.metrics.find(d => d.city===c.city && d.model==="u-net per-city");
-      g.append("text").attr("class","label").attr("x", w-4).attr("y", y(c.prevalence)-8)
-        .attr("text-anchor","end").style("font-size","11px")
-        .text(c.city.toUpperCase()+"  AP "+d3.format(".3f")(m.ap_decay));
+      g.append("text").attr("class","label").attr("x", w-4).attr("y", 14 + i*19)
+        .attr("text-anchor","end").style("font-size","11px").attr("fill",C.city[c.city])
+        .attr("opacity",0).text(c.city.toUpperCase()+"  AP "+d3.format(".3f")(m.ap_decay))
+        .transition().delay(i*220+700).duration(400).attr("opacity",1);
     });
   },
 
-  area(){
-    const {w,h,g} = panel(), rows = DATA.stats.regime;
-    const classes = ["new development","decay"];
-    const x = d3.scaleLinear()
-      .domain([0, d3.max(rows,d=>d["predicted_km2_decay"])*1.2]).range([0,w]);
-    const y = d3.scaleBand().domain(rows.map(d=>d.city)).range([0,h]).padding(.3);
-    const sub = d3.scaleBand().domain(classes).range([0,y.bandwidth()]).padding(.15);
-    axes(g,w,h,x,y,"AREA DETECTED, SQUARE KILOMETRES",null);
-    rows.forEach(d => classes.forEach(cls => {
-      const v = d["predicted_km2_"+cls];
-      g.append("rect").attr("x",0).attr("y", y(d.city)+sub(cls))
-        .attr("height", sub.bandwidth()).attr("fill", C.cls[cls])
-        .attr("stroke",C.ink).attr("stroke-width",2.2)
-        .attr("width",0).transition().duration(800).attr("width", x(v));
-      g.append("text").attr("class","label").attr("x", x(v)+8)
-        .attr("y", y(d.city)+sub(cls)+sub.bandwidth()/2+4)
-        .style("font-size","11px").text(d3.format(".2f")(v)+" km²");
-    }));
-  },
-
+  /* scatter — points rise from the baseline, then the fit line draws in */
   scatter(){
     const {w,h,g} = panel();
     const layer = "311 vacancy density", rows = DATA.stats.tracts;
-    const x = d3.scaleLinear().domain([0, d3.max(rows,d=>+d["U-Net detection density"])]).nice().range([0,w]);
-    const y = d3.scaleLinear().domain([0, d3.max(rows,d=>+d[layer])]).nice().range([h,0]);
-    axes(g,w,h,x,y,"DETECTED DECAY PER SQUARE KILOMETRE","311 VACANCY PER SQUARE KILOMETRE");
+    const xv = d => +d["U-Net detection density"], yv = d => +d[layer];
+    const x = d3.scaleLinear().domain([0, d3.max(rows,xv)]).nice().range([0,w]);
+    const y = d3.scaleLinear().domain([0, d3.max(rows,yv)]).nice().range([h,0]);
+    gridX(g,x,h); gridY(g,y,w);
+    axes(g,w,h,x,y,"DETECTED DECAY PER km²","311 VACANCY PER km²");
+
+    // colour by detected-decay quintile
+    const pos = rows.map(xv).filter(v=>v>0).sort(d3.ascending);
+    const cuts = [.2,.4,.6,.8].map(q=>d3.quantileSorted(pos,q));
+    const col = v => v<=0 ? C.ramp[0] : C.ramp[Math.min(4,1+cuts.filter(c=>v>c).length)];
+
+    const order = rows.map((d,i)=>i).sort((a,b)=>xv(rows[a])-xv(rows[b]));
+    const rank = new Map(order.map((idx,pos)=>[idx,pos]));
     g.selectAll("circle").data(rows).join("circle")
-      .attr("cx", d=>x(+d["U-Net detection density"])).attr("cy", d=>y(+d[layer]))
-      .attr("r",0).attr("fill",C.mute).attr("stroke",C.ink).attr("stroke-width",.6)
-      .transition().delay((d,i)=>i*1.2).duration(400).attr("r",4);
+      .attr("cx", d=>x(xv(d))).attr("cy", y(0))
+      .attr("r",3.6).attr("fill",d=>col(xv(d))).attr("fill-opacity",.72)
+      .attr("stroke",C.ink).attr("stroke-width",.5).attr("opacity",0)
+      .transition().delay((d,i)=>rank.get(i)*1.4).duration(600).ease(d3.easeCubicOut)
+      .attr("cy", d=>y(yv(d))).attr("opacity",1);
+
+    // linear fit, drawn after the cloud settles
+    const fit = linreg(rows.map(d=>({x:xv(d),y:yv(d)})));
+    const x0 = 0, x1 = x.domain()[1];
+    const fp = g.append("path")
+      .attr("d", d3.line()([[x(x0),y(fit.a+fit.b*x0)],[x(x1),y(Math.max(0,fit.a+fit.b*x1))]]))
+      .attr("fill","none").attr("stroke",C.ink).attr("stroke-width",2.6);
+    const L = fp.node().getTotalLength();
+    fp.attr("stroke-dasharray",`${L} ${L}`).attr("stroke-dashoffset",L)
+      .transition().delay(900).duration(900).ease(d3.easeCubicInOut).attr("stroke-dashoffset",0);
+
     const v = DATA.stats.validation.find(d =>
       d.record==="311 vacancy" && d["decay from"]==="U-Net detection" && d.cell_m===300);
     g.append("text").attr("class","label").attr("x", w-4).attr("y", 18)
-      .attr("text-anchor","end")
-      .text("SPEARMAN "+d3.format("+.3f")(v.spearman)+"   PARTIAL "+d3.format("+.3f")(v.partial_spearman));
+      .attr("text-anchor","end").attr("opacity",0)
+      .text("SPEARMAN "+d3.format("+.3f")(v.spearman)+"   PARTIAL "+d3.format("+.3f")(v.partial_spearman))
+      .transition().delay(1400).duration(400).attr("opacity",1);
   },
 
   scale(){
     const {w,h,g} = panel();
     const rows = DATA.stats.validation.filter(d => d["decay from"]==="U-Net detection");
     const sizes = [...new Set(rows.map(d=>d.cell_m))].sort(d3.ascending);
-    const x = d3.scalePoint().domain(sizes).range([0,w]);
+    const x = d3.scalePoint().domain(sizes).range([0,w]).padding(.5);
     const y = d3.scaleLinear().domain([d3.min(rows,d=>d.spearman)-.04, 0.02]).range([h,0]);
+    gridY(g,y,w);
     axes(g,w,h,x,y,"AGGREGATION CELL SIZE, METRES","SPEARMAN WITH DETECTED DECAY");
     g.append("line").attr("x1",0).attr("x2",w).attr("y1",y(0)).attr("y2",y(0))
       .attr("stroke",C.ink).attr("stroke-width",2.6);
     const tone = {"311 vacancy":C.umber, "demolition permits":C.gold, "vacant buildings":C.mute};
-    d3.groups(rows, d=>d.record).forEach(([record, vals]) => {
+    d3.groups(rows, d=>d.record).forEach(([record, vals], gi) => {
       vals.sort((a,b)=>a.cell_m-b.cell_m);
       [["spearman",null],["partial_spearman","5 4"]].forEach(([field, dash]) => {
-        g.append("path").datum(vals).attr("fill","none")
+        const p = g.append("path").datum(vals).attr("fill","none")
           .attr("stroke", tone[record] || C.ink).attr("stroke-width",3)
-          .attr("stroke-dasharray", dash)
-          .attr("d", d3.line().x(d=>x(d.cell_m)).y(d=>y(d[field])));
+          .attr("stroke-linejoin","round").attr("stroke-dasharray", dash)
+          .attr("d", d3.line().curve(d3.curveMonotoneX).x(d=>x(d.cell_m)).y(d=>y(d[field])));
+        if(!dash){
+          const L=p.node().getTotalLength();
+          p.attr("stroke-dasharray",`${L} ${L}`).attr("stroke-dashoffset",L)
+            .transition().delay(gi*180).duration(1100).ease(d3.easeCubicInOut).attr("stroke-dashoffset",0);
+        } else { p.attr("opacity",0).transition().delay(gi*180+700).duration(500).attr("opacity",1); }
       });
-      g.append("text").attr("class","label").attr("x", x(vals[vals.length-1].cell_m)+8)
-        .attr("y", y(vals[vals.length-1].spearman)+4).style("font-size","11px")
-        .text(record.toUpperCase());
+      vals.forEach(d=> g.append("circle").attr("cx",x(d.cell_m)).attr("cy",y(d.spearman))
+        .attr("r",0).attr("fill",tone[record]||C.ink).attr("stroke",C.ink).attr("stroke-width",1.4)
+        .transition().delay(gi*180+900).duration(300).ease(d3.easeBackOut).attr("r",4));
+      const last = vals[vals.length-1];
+      g.append("text").attr("class","label").attr("x", x(last.cell_m)-10)
+        .attr("y", y(last.spearman)-9).style("font-size","11px")
+        .attr("text-anchor","end").attr("fill",tone[record]||C.ink).attr("opacity",0)
+        .text(record.toUpperCase())
+        .transition().delay(gi*180+1000).duration(400).attr("opacity",1);
     });
   }
 };
