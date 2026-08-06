@@ -22,8 +22,9 @@ body{background:var(--paper);color:var(--ink);
    Tiles and furniture must never intercept the pointer, or tract hover dies. */
 #basemap,#roads,#labels,#overlay,#bounds{pointer-events:none}
 #basemap{mix-blend-mode:multiply}
-#basemap image{filter:sepia(.30) saturate(.72) brightness(1.05) contrast(.94)}
-#labels image{filter:sepia(.12) brightness(.92) contrast(1.05);opacity:.92}
+/* keep the tiles' own street network legible — warm it, don't wash it out */
+#basemap image{filter:sepia(.16) saturate(.92) brightness(.94) contrast(1.28)}
+#labels image{filter:sepia(.10) brightness(.86) contrast(1.12);opacity:.96}
 
 #legend{position:fixed;left:24px;bottom:26px;z-index:5;font-size:11px;
   letter-spacing:.04em;line-height:1.85;max-width:240px;
@@ -120,7 +121,7 @@ const C = {paper:"#f1f2e0", ink:"#381f04", mute:"#5a544c", white:"#ffffff",
 const HELV = "'Helvetica Neue',Helvetica,Arial,sans-serif";
 
 const SCENES = [
- {id:"method", type:"infographic",
+ {id:"method", type:"infographic", art:"method",
   title:"Two classes of land-cover change",
   body:["Two processes leave a fingerprint on satellite imagery. <b>New development</b> —"+
         " sprawl — is open or low-density land turning built. <b>Decay</b> is the reverse:"+
@@ -171,11 +172,13 @@ const SCENES = [
 
  {id:"detected", type:"map", city:"Philadelphia",
   layers:["detected-holdout|decay","detected-holdout|new development"],
-  title:"Model predictions on held-out blocks",
-  body:["Same blocks, model output. It catches the big clusters in the south and along the"+
-        " northeast riverfront and misses most of the rest.",
-        "Precision on decay is <b>0.09</b> at a recall of 0.12 — nine of ten flagged pixels"+
-        " are wrong. Stated, not buried."]},
+  reference:["observed|decay","observed|new development"],
+  title:"Prediction against truth, held-out blocks",
+  body:["Grey is the truth from the previous map; gold and green are what the model predicted"+
+        " on the same blocks. Where the two coincide, the model was right.",
+        "It finds the big clusters in the south and along the northeast riverfront and misses"+
+        " most of the rest. Precision on decay is <b>0.09</b> at a recall of 0.12 — nine of"+
+        " ten flagged pixels are wrong. Stated, not buried."]},
 
  {id:"ap", type:"chart", chart:"ap",
   title:"Average precision vs. spectral baseline",
@@ -227,7 +230,7 @@ const SCENES = [
         " recomputed at six cell sizes, 90 metres to 2.4 kilometres.",
         "The sign never flips, and controlling for built area never rescues it."]},
 
- {id:"why", type:"map", city:"Philadelphia", layers:["detected|decay"],
+ {id:"why", type:"infographic", art:"pixel",
   title:"Interpretation: change below pixel scale",
   body:["A Philadelphia rowhouse is four to five metres wide — about a tenth of a 30-metre"+
         " pixel. Demolish one and the block still stands, still paved, still returning the"+
@@ -297,7 +300,7 @@ function observe(){
   document.querySelectorAll(".step").forEach(n => io.observe(n));
 }
 
-/* ---------- projection, with an animated fly between cities ---------- */
+/* ---------- projection ---------- */
 
 function frameFor(city){
   const feature = {type:"FeatureCollection",
@@ -308,27 +311,36 @@ function frameFor(city){
 function projectionFrom(v){
   return d3.geoMercator().center(v.center).scale(v.scale).translate([W/2, H/2]);
 }
-function flyTo(target, animate, drawFrame, onSettle){
-  if(!view || !animate){
-    view = target; const p = projectionFrom(view);
-    drawFrame(p); onSettle(p); return;
-  }
-  gBasemap.interrupt().attr("opacity",0);
-  gLabels.interrupt().attr("opacity",0);
-  const from = view, iC = d3.interpolate(from.center, target.center),
-        iS = d3.interpolate(from.scale, target.scale);
-  const t = d3.timer(elapsed => {
-    const k = d3.easeCubicInOut(Math.min(1, elapsed / 950));
-    view = {center: iC(k), scale: iS(k)};
-    const p = projectionFrom(view);
-    drawFrame(p);
-    if(k === 1){ t.stop(); onSettle(p); }
-  });
+
+/* ---------- deconstruct / reconstruct ----------
+   No camera move. Each map is taken apart into its own pieces — basemap
+   tiles, streets, tracts, detected pixels, city edge — and put back
+   together in that order, so you watch the map being built rather than
+   flown over. */
+
+const ASSEMBLE = 820;               // duration of one piece's flight home
+function noise(i){                  // deterministic jitter, stable per index
+  const x = Math.sin(i * 12.9898 + 78.233) * 43758.5453;
+  return x - Math.floor(x);
+}
+// piece starts thrown outward from the frame centre, rotated and shrunk
+function scatterFrom(cx, cy, i, spread){
+  const a = noise(i) * Math.PI * 2,
+        r = spread * (0.45 + noise(i + 7) * 0.75),
+        rot = (noise(i + 13) - 0.5) * 46;
+  return `translate(${cx + Math.cos(a)*r},${cy + Math.sin(a)*r})`
+       + ` rotate(${rot}) scale(0.66) translate(${-cx},${-cy})`;
+}
+const HOME = "translate(0,0) rotate(0) scale(1)";
+// stagger radially: pieces nearest the centre land first, the edge follows
+function radialDelay(cx, cy, base, span){
+  const R = Math.hypot(W, H) / 2;
+  return Math.min(1, Math.hypot(cx - W/2, cy - H/2) / R) * span + base;
 }
 
 /* ---------- web-mercator tile basemap ---------- */
 
-function drawBasemap(projection){
+function drawBasemap(projection, assemble){
   if(typeof d3.tile !== "function") return;
   const k = projection.scale() * 2 * Math.PI;
   const tiles = d3.tile().size([W,H]).scale(k).translate(projection([0,0]))();
@@ -344,13 +356,30 @@ function drawBasemap(projection){
   const url = (style,d) =>
     `https://${sub(d)}.basemaps.cartocdn.com/${style}/${d.z}/${d.x}/${d.y}${px}.png`;
 
-  gBasemap.style("display",null).selectAll("image").data(tiles, key)
+  const base = gBasemap.style("display",null).attr("opacity",1)
+    .selectAll("image").data(tiles, key)
     .join("image").attr("href", d => url("light_nolabels", d)).call(place);
-  gLabels.style("display",null).selectAll("image").data(tiles, key)
+  const lab = gLabels.style("display",null).attr("opacity",1)
+    .selectAll("image").data(tiles, key)
     .join("image").attr("href", d => url("light_only_labels", d)).call(place);
 
-  gBasemap.transition().duration(500).attr("opacity",1);
-  gLabels.transition().duration(500).attr("opacity",1);
+  if(!assemble){
+    base.attr("transform",null).attr("opacity",1);
+    lab.attr("transform",null).attr("opacity",1);
+    return;
+  }
+  // tiles drop into the grid first — the ground the rest is built on
+  const tileDelay = d => radialDelay(+d3.select(d).attr("x") + tiles.scale/2,
+                                     +d3.select(d).attr("y") + tiles.scale/2, 0, 260);
+  base.interrupt().attr("opacity",0)
+    .attr("transform",function(d,i){
+      return scatterFrom(+this.getAttribute("x")+tiles.scale/2,
+                         +this.getAttribute("y")+tiles.scale/2, i, 90); })
+    .transition().delay(function(){ return tileDelay(this); })
+    .duration(ASSEMBLE).ease(d3.easeCubicOut)
+    .attr("transform", HOME).attr("opacity",1);
+  lab.interrupt().attr("opacity",0).attr("transform",null)
+    .transition().delay(360).duration(520).attr("opacity",1);
 }
 
 /* ---------- render dispatch ---------- */
@@ -364,14 +393,18 @@ function render(scene, animate){
 
   if(isFlat){
     gChart.selectAll("*").interrupt(); gChart.selectAll("*").remove();
-    (scene.type === "infographic" ? INFOGRAPHIC : CHARTS[scene.chart])();
+    (scene.type === "infographic" ? INFOGRAPHIC[scene.art] : CHARTS[scene.chart])();
     legendFor(scene);
     return;
   }
   const city = scene.type === "tract" ? "Philadelphia" : scene.city;
-  flyTo(frameFor(city), animate,
-        p => drawMapVectors(scene, city, p),
-        p => drawBasemap(p));
+  // no camera move: reframe instantly, then rebuild the map piece by piece
+  const cityChanged = !view || view.city !== city;
+  view = Object.assign({city}, frameFor(city));
+  const projection = projectionFrom(view);
+  const assemble = animate && cityChanged;
+  drawBasemap(projection, assemble);
+  drawMapVectors(scene, city, projection, animate, assemble);
   legendFor(scene);
   if(scene.type === "tract") readoutHint("Hover any tract");
   else readoutCity(city);
@@ -385,21 +418,30 @@ const ROAD_STYLE = {
   S1200:{w:0.9, o:.42},   // secondary arterials
   S1400:{w:0.35,o:.26}    // local streets
 };
-function drawRoads(city, path, faint){
+function drawRoads(city, path, faint, assemble){
   const roads = DATA.roads.features.filter(f => f.properties.city === city);
-  gRoads.attr("opacity", faint ? .45 : 1)
-    .selectAll("path").data(roads).join("path")
+  const target = faint ? .45 : 1;
+  gRoads.selectAll("path").data(roads).join("path")
     .attr("d", path).attr("fill","none")
     .attr("stroke", C.ink).attr("stroke-linecap","round")
     .attr("stroke-width", d => (ROAD_STYLE[d.properties.MTFCC]||ROAD_STYLE.S1400).w)
     .attr("stroke-opacity", d => (ROAD_STYLE[d.properties.MTFCC]||ROAD_STYLE.S1400).o);
+  // 9k segments — animate the group, not each line
+  gRoads.interrupt();
+  if(assemble){
+    gRoads.attr("opacity",0).attr("transform","scale(1.04)")
+      .transition().delay(300).duration(760).ease(d3.easeCubicOut)
+      .attr("opacity",target).attr("transform","scale(1)");
+  } else {
+    gRoads.attr("transform",null).transition().duration(320).attr("opacity",target);
+  }
 }
 
-function drawMapVectors(scene, city, projection){
+function drawMapVectors(scene, city, projection, animate, assemble){
   const path = d3.geoPath(projection);
 
   // streets sit under the choropleth on tract scenes, over the tiles otherwise
-  drawRoads(city, path, scene.type === "tract");
+  drawRoads(city, path, scene.type === "tract", assemble);
 
   if(scene.type === "tract"){
     const values = DATA.tracts.features
@@ -410,24 +452,45 @@ function drawMapVectors(scene, city, projection){
     const colour = v => v <= 0 ? C.ramp[0]
       : C.ramp[Math.min(4, 1 + cuts.filter(c => v > c).length)];
 
-    gTracts.selectAll("path").data(DATA.tracts.features).join("path")
+    const fillFor = f => {
+      const row = DATA.tractById.get(String(f.properties.GEOID));
+      return colour(row ? +row[scene.layer] : 0);
+    };
+    const cells = gTracts.selectAll("path").data(DATA.tracts.features).join("path")
       .attr("d", path)
       .attr("fill-opacity", .82)
       .attr("stroke", C.mute).attr("stroke-width", 0.4)
       .style("cursor","crosshair")
-      .on("mousemove", (e,f) => readoutTract(f.properties.GEOID))
-      .transition().duration(650).ease(d3.easeCubicOut)
-      .attr("fill", f => {
-        const row = DATA.tractById.get(String(f.properties.GEOID));
-        return colour(row ? +row[scene.layer] : 0);
-      });
+      .on("mousemove", (e,f) => readoutTract(f.properties.GEOID));
+
+    cells.interrupt();
+    if(assemble){
+      // 408 tracts fly back into the city, centre outward
+      cells.attr("fill", fillFor).attr("opacity",0)
+        .attr("transform",(f,i)=>{ const c=path.centroid(f);
+          return isFinite(c[0]) ? scatterFrom(c[0],c[1],i,150) : null; })
+        .transition().delay((f,i)=>{ const c=path.centroid(f);
+          return isFinite(c[0]) ? radialDelay(c[0],c[1],420,300) : 420; })
+        .duration(ASSEMBLE).ease(d3.easeCubicOut)
+        .attr("transform", HOME).attr("opacity",1);
+    } else {
+      // same city, new variable: recolour in place, staggered
+      cells.attr("transform",null).attr("opacity",1)
+        .transition().delay((f,i)=>(i%23)*9).duration(560).ease(d3.easeCubicOut)
+        .attr("fill", fillFor);
+    }
     gOverlay.selectAll("image").remove();
   } else {
     gTracts.selectAll("path").remove();
-    const items = (scene.layers || []).map(key => {
+    // reference layers (e.g. observed truth) render first, desaturated,
+    // so predictions can be judged against them on the same frame
+    const items = (scene.reference || []).map(key => {
+      const o = DATA.stats.overlays[city + "|" + key];
+      return o ? Object.assign({key:"ref|"+key, ref:true}, o) : null;
+    }).concat((scene.layers || []).map(key => {
       const o = DATA.stats.overlays[city + "|" + key];
       return o ? Object.assign({key}, o) : null;
-    }).filter(Boolean);
+    })).filter(Boolean);
 
     gOverlay.selectAll("image").data(items, d => d.key).join(
       enter => enter.append("image").attr("opacity", 0),
@@ -435,18 +498,44 @@ function drawMapVectors(scene, city, projection){
       exit => exit.transition().duration(400).attr("opacity", 0).remove())
       .attr("href", d => d.file)
       .attr("preserveAspectRatio","none")
+      .style("filter", d => d.ref ? "grayscale(1) brightness(.55)" : null)
       .each(function(d){
         const tl = projection(d.bounds[0]), br = projection(d.bounds[1]);
         d3.select(this).attr("x", tl[0]).attr("y", tl[1])
           .attr("width", br[0]-tl[0]).attr("height", br[1]-tl[1]);
       })
-      .transition().duration(600).attr("opacity", 1);
+      .call(sel => {
+        sel.interrupt();
+        // detected pixels settle last, once the city underneath is whole
+        const cap = d => d.ref ? .55 : 1;
+        if(assemble){
+          sel.attr("opacity",0).attr("transform","translate(0,-14) scale(1.02)")
+            .transition().delay(880).duration(700).ease(d3.easeCubicOut)
+            .attr("opacity",cap).attr("transform",HOME);
+        } else {
+          sel.attr("transform",null)
+            .transition().duration(520).attr("opacity",cap);
+        }
+      });
   }
 
-  gBounds.selectAll("path")
+  // the city edge draws itself closed, sealing the reconstruction
+  const edge = gBounds.selectAll("path")
     .data(DATA.bounds.features.filter(f => f.properties.city === city))
     .join("path").attr("d", path)
     .attr("fill","none").attr("stroke", C.ink).attr("stroke-width", 2.6);
+  edge.interrupt();
+  if(assemble){
+    edge.each(function(){
+      const L = this.getTotalLength();
+      d3.select(this).attr("stroke-dasharray",`${L} ${L}`).attr("stroke-dashoffset",L)
+        .transition().delay(200).duration(1500).ease(d3.easeCubicInOut)
+        .attr("stroke-dashoffset",0)
+        .on("end", function(){ d3.select(this).attr("stroke-dasharray",null); });
+    });
+  } else {
+    edge.attr("stroke-dasharray",null).attr("stroke-dashoffset",null);
+  }
 }
 
 /* ---------- legend and readout ---------- */
@@ -482,6 +571,7 @@ function legendFor(scene){
       const cls = key.split("|")[1];
       swatchRow(C.cls[cls], cls.toUpperCase());
     });
+    if(scene.reference) swatchRow("#6f6f6f","OBSERVED TRUTH");
     ruleRow(C.ink,"STREET NETWORK");
   } else if(scene.type === "infographic"){
     title("CLASSES");
@@ -561,7 +651,8 @@ function axes(g,w,h,x,y,xl,yl,noYAxis,xfmt){
 
 /* ---------- infographic: what we measure and how ---------- */
 
-function INFOGRAPHIC(){
+const INFOGRAPHIC = {};
+INFOGRAPHIC.method = function(){
   const g = gChart.append("g");
   const pad = Math.max(40, W*0.08);
   const cx = W/2;
@@ -678,7 +769,77 @@ function INFOGRAPHIC(){
     reveal(grp, 1500 + i*180);
     cxx += chipW + Math.min(48,W*0.06);
   });
-}
+};
+
+/* Closing diagram: why demolition disappears below a 30 m pixel.
+   One Landsat pixel drawn to scale, a rowhouse block inside it, one house
+   removed — and the pixel's reflectance barely moves. */
+INFOGRAPHIC.pixel = function(){
+  const g = gChart.append("g");
+  const cx = W/2;
+  const reveal = (sel,delay) => sel.attr("opacity",0)
+      .transition().delay(delay).duration(650).ease(d3.easeCubicOut).attr("opacity",1);
+
+  const px = Math.min(W, H) * 0.44;          // one 30 m pixel, drawn large
+  const x0 = cx - px/2, y0 = H*0.14;
+
+  g.append("text").attr("x",cx).attr("y",y0-26).attr("text-anchor","middle")
+    .style("font-size","13px").attr("fill",C.mute).call(s=>reveal(s,0))
+    .text("ONE LANDSAT PIXEL · 30 × 30 METRES");
+
+  // the pixel
+  const pixel = g.append("g");
+  pixel.append("rect").attr("x",x0).attr("y",y0).attr("width",px).attr("height",px)
+    .attr("fill",C.sand).attr("fill-opacity",.35)
+    .attr("stroke",C.ink).attr("stroke-width",3);
+  reveal(pixel, 120);
+
+  // rowhouse strip: ~7 houses of 4.5 m across a 30 m frontage occupy one edge
+  const hw = px*(4.5/30), hh = px*(11/30), gap=px*0.006;
+  const rowY = y0 + px - hh;
+  const houses = [];
+  for(let i=0;i<6;i++){
+    const hx = x0 + i*(hw+gap) + px*0.04;
+    if(hx+hw > x0+px) break;
+    houses.push(g.append("rect").attr("x",hx).attr("y",rowY)
+      .attr("width",hw).attr("height",hh)
+      .attr("fill",C.umber).attr("stroke",C.ink).attr("stroke-width",1.6));
+  }
+  houses.forEach((h,i)=>reveal(h, 300+i*90));
+  g.append("text").attr("x",x0+px*0.04).attr("y",rowY-10)
+    .style("font-size","11px").attr("fill",C.mute).attr("font-family",HELV)
+    .call(s=>reveal(s,320)).text("a rowhouse is 4–5 m wide — a tenth of the pixel");
+
+  // demolish one: it flies out, deconstruction-style, and the pixel shrugs
+  const gone = houses[2];
+  gone.transition().delay(1250).duration(800).ease(d3.easeCubicIn)
+    .attr("transform",`translate(${px*0.16},${-px*0.34}) rotate(14)`)
+    .attr("opacity",0);
+  const cross = g.append("path")
+    .attr("d",`M${+gone.attr("x")},${rowY+hh*0.2} l${hw},${hh*0.6} m0,${-hh*0.6} l${-hw},${hh*0.6}`)
+    .attr("stroke",C.gold).attr("stroke-width",3).attr("fill","none");
+  reveal(cross, 2050);
+
+  // the arithmetic
+  const fy = y0 + px + 44;
+  const facts = [
+    ["FOOTPRINT REMOVED", "≈ 10% of the pixel"],
+    ["REFLECTANCE CHANGE", "below the noise floor"],
+    ["PIXEL LABEL", "unchanged — still developed"]
+  ];
+  facts.forEach((r,i)=>{
+    const t = g.append("text").attr("x",cx).attr("y",fy+i*24).attr("text-anchor","middle");
+    t.append("tspan").style("font-size","11px").text(r[0]+"  ");
+    t.append("tspan").style("font-size","12px").attr("fill",C.umber)
+      .attr("font-family",HELV).attr("font-weight","700").text(r[1]);
+    reveal(t, 2300+i*220);
+  });
+  const closing = g.append("text").attr("x",cx).attr("y",fy+facts.length*24+30)
+    .attr("text-anchor","middle").style("font-size","11px")
+    .attr("fill",C.mute).attr("font-family",HELV)
+    .text("what does move a pixel: a sparse edge parcel going to seed — real change, not blight");
+  reveal(closing, 3050);
+};
 
 /* ---------- charts ---------- */
 
