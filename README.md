@@ -2,17 +2,15 @@
 
 I wanted to know whether a convolutional network trained on Landsat imagery could identify where a city is coming apart. Blight detection from satellites is a standing promise in planning analytics. Cities have limited demolition budgets and land banks with waiting lists, and a citywide map of where decline is accelerating would be useful to them.
 
-The model works, in the narrow sense that it beats a spectral baseline on the decay class in two of three cities. Then I checked it against Philadelphia's own records, and the two disagree. Not weakly. The correlation between detected decay and recorded vacancy is negative at every spatial scale I tested, and it holds after controlling for the amount of building in each cell.
+The model works, in the narrow sense that it beats a spectral baseline on the decay class in two of three cities. Then I checked it against Philadelphia's own records, and the two disagree. Not weakly. The correlation between detected decay and recorded vacancy is negative across all spatial scales I tested, and it holds after controlling for the amount of building in each cell.
 
-CLAUDE CODE HELPS ME WITH D3 WEB BUILDUP - ANIMATION, DEPLOYMENT, CODE REVIEW
-
-Live site at https://cyber-hbliu.github.io/musa650-finalproject/
+The deliverable alongside the paper is the [interactive site](https://cyber-hbliu.github.io/musa650-finalproject/): a 15-scene scrolling narrative with vector-change layers, per-tract choropleths that swap between satellite and municipal measures over identical geography, and hotspot data for block-group detail at zoom. **CLAUDE CODE HELPS ME WITH D3 WEB BUILDUP - ANIMATION, DEPLOYMENT, CODE REVIEW.**
 
 ## The problem
 
-Cities measure blight through administrative records. For 2015 to 2025 Philadelphia alone holds 298,608 vacancy-related 311 requests, 11,209 demolition permits and 8,773 entries on its vacant building list, and each source is shaped by who reports, who inspects and what gets filed. Satellite land cover promises a consistent alternative that observes every block on the same terms. This project asks whether that promise holds at rowhouse scale, where a 4 to 5 m facade occupies a tenth of a 30 m Landsat pixel.
+Cities measure blight through administrative records. From 2015 to 2025, Philadelphia alone had 298,608 vacancy-related 311 requests, 11,209 demolition permits, and 8,773 entries on its vacant building list, and each of these sources is shaped by who reports, who inspects, and what gets filed. Satellite land cover promises a consistent alternative that observes every block on the same terms. This project asks whether that promise holds at the rowhouse scale, where a 4-5 m facade occupies a tenth of a 30 m Landsat pixel.
 
-Two kinds of change are at stake. New development is land converting to built cover inside city limits. Decay is developed land losing intensity. The question is whether a segmentation model trained on annual land cover trajectories can find the second kind in the places municipal records also see it.
+Two kinds of change are at stake. New development is land converting to built cover inside city limits. Decay is developed land losing intensity. The question is whether a segmentation model trained on annual land cover trajectories can find the second kind where municipal records also see it.
 
 ## The approach
 
@@ -20,13 +18,13 @@ The work ran as a design loop rather than a straight pipeline. Each stage fed th
 
 ```mermaid
 flowchart TD
-    A["Frame the question<br/>heat island idea dropped, decay chosen"]
-    B["Assemble evidence<br/>NLCD trajectories, Landsat composites,<br/>three municipal record systems, ACS"]
-    C["Prototype the detector<br/>3-level U-Net, 18 channels,<br/>CE plus Tversky loss"]
-    D["Test the detector<br/>checkerboard spatial holdout,<br/>transfer to two cities, spectral nulls,<br/>normalisation ablation"]
-    E["Validate against the ground<br/>311, permits, vacant buildings<br/>at six aggregation scales"]
-    F["Interpret<br/>resolution mismatch, not model failure"]
-    G["Communicate<br/>15-scene d3 scroll site,<br/>hotspot and block group explorer"]
+    A["Start from a public use case<br/>city agencies target blight with biased,<br/>lagged administrative records"]
+    B["Build on open data only<br/>Landsat, NLCD, TIGER, ACS,<br/>Philadelphia open data endpoints,<br/>one reproducible pipeline"]
+    C["Prototype a spatial ML solution<br/>3-level U-Net on land cover<br/>trajectories, 18 channels"]
+    D["Ask whether it generalizes<br/>spatial holdout in Philadelphia,<br/>frozen transfer to Detroit and Atlanta,<br/>spectral nulls, normalisation ablation"]
+    E["Ground it in civic records<br/>311, permits, vacant buildings,<br/>six scales, built-area control"]
+    F["Weigh the policy consequence<br/>a blind instrument would misdirect<br/>reinvestment, so say it is blind"]
+    G["Deliver a data product<br/>15-scene d3 narrative anyone<br/>can read, no methods degree required"]
     A --> B --> C --> D --> E --> F --> G
     F -.->|question survives, framing does not| A
     G -.->|raster overlays too coarse| C
@@ -42,6 +40,6 @@ The detector clears its own checks. On decay it beats the spectral null in Phila
 
 The validation is the finding. Detected decay correlates negatively with all three record systems at every scale, the correlation survives the built-area control, and it moves toward zero as the record type gets closer to a physical demolition. The block group extension repeats the pattern, with rank correlations against income, poverty, vacancy and unemployment all inside ±0.15. The four largest detected hotspots fall in 9800-series census tracts, the special land-use codes for industrial and airport land, not in residential neighborhoods. Read together, the satellite is not seeing disinvestment and inverting it. It is not seeing disinvestment at all, because the object that decays is an order of magnitude smaller than the pixel. Thirty-metre annual land cover is not a valid instrument for rowhouse-scale decline, and the detector's checks are what make that a credible negative result rather than a broken model.
 
-The deliverable alongside the paper is the interactive site, a 15-scene scrolling narrative with vector change layers, per-tract choropleths that swap between satellite and municipal measures over identical geography, and hotspot data for block group detail on zoom. Data comes from Landsat Collection 2 Level 2 via Microsoft Planetary Computer, USGS Annual NLCD Collection 1.2 via the MRLC GeoServer, US Census TIGER/Line 2024 and ACS 2019–2023, and the City of Philadelphia's Carto and ArcGIS open data endpoints for 311 requests, demolition permits and the vacant building inventory.
+Data comes from Landsat Collection 2 Level 2 via Microsoft Planetary Computer, USGS Annual NLCD Collection 1.2 via the MRLC GeoServer, US Census TIGER/Line 2024 and ACS 2019–2023, and the City of Philadelphia's Carto and ArcGIS open data endpoints for 311 requests, demolition permits and the vacant building inventory.
 
 
