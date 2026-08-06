@@ -26,8 +26,8 @@ flowchart TD
     F["Weigh the policy consequence"]
     G["Deliver a data product<br/>15-scene d3 narrative anyone<br/>can read"]
     A --> B --> C --> D --> E --> F --> G
-    F -.->|question survives, framing does not| A
-    G -.->|raster overlays too coarse| C
+    F -.->| A
+    G -.->| C
 ```
 
 Labels come from USGS Annual NLCD Collection 1.2, with decay defined as a fall in median development intensity between 2015–2017 and 2023–2025. Imagery is Landsat Collection 2 surface reflectance, summer median composites for 2015 and 2025 built through the Planetary Computer STAC. The detector is a three-level U-Net evaluated on a 256-pixel checkerboard spatial holdout in Philadelphia and transferred frozen to Detroit and Atlanta, against difference-index spectral nulls and a global versus per-city normalisation ablation.
