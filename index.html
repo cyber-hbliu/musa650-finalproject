@@ -19,8 +19,9 @@ body{background:var(--paper);color:var(--ink);
 #stage svg{width:100%;height:100%;display:block}
 
 /* tile basemap: warmed and multiplied into the paper so it reads as a print.
-   Tiles and furniture must never intercept the pointer, or tract hover dies. */
-#basemap,#roads,#labels,#overlay,#bounds{pointer-events:none}
+   Tiles and furniture must never intercept the pointer — but the overlay
+   layer now holds hoverable vector patches, so it stays interactive. */
+#basemap,#roads,#labels,#bounds{pointer-events:none}
 #basemap{mix-blend-mode:multiply}
 /* keep the tiles' own street network legible — warm it, don't wash it out */
 #basemap image{filter:sepia(.16) saturate(.92) brightness(.94) contrast(1.28)}
@@ -53,6 +54,18 @@ body{background:var(--paper);color:var(--ink);
   font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-weight:700}
 #readout .row span:last-child{color:var(--umber);font-variant-numeric:tabular-nums}
 #stage:hover ~ #readout.enabled{opacity:1;transform:translateY(0) scale(1)}
+
+/* cursor tooltip: follows the pointer over patches, chart marks and diagrams */
+#tip{position:fixed;z-index:9;background:var(--white);border:2px solid var(--ink);
+  padding:8px 11px;font-size:11px;line-height:1.65;letter-spacing:.03em;
+  max-width:230px;pointer-events:none;opacity:0;transition:opacity .12s;
+  box-shadow:5px 5px 0 rgba(56,31,4,.14)}
+#tip.on{opacity:1}
+#tip .t{font-size:10px;letter-spacing:.13em;color:var(--mute);margin-bottom:3px;
+  font-family:"Archivo Black","Helvetica Neue",Helvetica,Arial,sans-serif}
+#tip .row{display:flex;justify-content:space-between;gap:12px;
+  font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-weight:700}
+#tip .row span:last-child{color:var(--umber);font-variant-numeric:tabular-nums}
 
 #story{margin-left:60vw;width:40vw;padding:0 6vw}
 .step{min-height:92vh;display:flex;flex-direction:column;justify-content:center;
@@ -92,6 +105,7 @@ body{background:var(--paper);color:var(--ink);
 <div id="stage"><svg id="canvas"></svg></div>
 <div id="legend"></div>
 <div id="readout"><div id="readout-body"></div></div>
+<div id="tip"></div>
 
 <div id="story">
   <div id="masthead">
@@ -171,7 +185,7 @@ const SCENES = [
         "These are the true labels on held-out ground."]},
 
  {id:"detected", type:"map", city:"Philadelphia",
-  layers:["detected-holdout|decay","detected-holdout|new development"],
+  layers:["detectedholdout|decay","detectedholdout|new development"],
   reference:["observed|decay","observed|new development"],
   title:"Prediction against truth, held-out blocks",
   body:["Grey is the truth from the previous map; gold and green are what the model predicted"+
@@ -300,6 +314,35 @@ function observe(){
   document.querySelectorAll(".step").forEach(n => io.observe(n));
 }
 
+/* ---------- cursor tooltip ---------- */
+
+function tipRows(title, rows){
+  return '<div class="t">'+title+'</div>' + rows.map(r =>
+    '<div class="row"><span>'+r[0]+'</span><span>'+r[1]+'</span></div>').join("");
+}
+function tipShow(e, html){
+  const x = Math.min(e.clientX + 14, window.innerWidth - 246);
+  const y = Math.min(e.clientY + 14, window.innerHeight - 90);
+  d3.select("#tip").html(html).style("left", x+"px").style("top", y+"px").classed("on", true);
+}
+function tipHide(){ d3.select("#tip").classed("on", false); }
+// every scene change clears any tooltip left hanging mid-transition
+function hoverable(sel){ return sel.style("cursor","crosshair").on("mouseleave", tipHide); }
+
+/* ---------- vector change patches ---------- */
+
+const VEC_CACHE = {};
+let overlayToken = 0;
+function loadVectors(keys){
+  return Promise.all(keys.map(k => {
+    if(VEC_CACHE[k] !== undefined) return Promise.resolve(VEC_CACHE[k]);
+    const meta = DATA.stats.vectors && DATA.stats.vectors[k];
+    if(!meta) return Promise.resolve(VEC_CACHE[k] = null);
+    return d3.json(meta.file).then(fc => VEC_CACHE[k] = fc)
+                             .catch(() => VEC_CACHE[k] = null);
+  }));
+}
+
 /* ---------- projection ---------- */
 
 function frameFor(city){
@@ -386,6 +429,7 @@ function drawBasemap(projection, assemble){
 
 function render(scene, animate){
   current = scene;
+  tipHide();
   const isFlat = scene.type === "chart" || scene.type === "infographic";
   gChart.style("display", isFlat ? null : "none");
   MAP_LAYERS.forEach(g => g.style("display", isFlat ? "none" : null));
@@ -479,44 +523,52 @@ function drawMapVectors(scene, city, projection, animate, assemble){
         .transition().delay((f,i)=>(i%23)*9).duration(560).ease(d3.easeCubicOut)
         .attr("fill", fillFor);
     }
-    gOverlay.selectAll("image").remove();
+    gOverlay.selectAll("*").remove();
   } else {
     gTracts.selectAll("path").remove();
-    // reference layers (e.g. observed truth) render first, desaturated,
-    // so predictions can be judged against them on the same frame
-    const items = (scene.reference || []).map(key => {
-      const o = DATA.stats.overlays[city + "|" + key];
-      return o ? Object.assign({key:"ref|"+key, ref:true}, o) : null;
-    }).concat((scene.layers || []).map(key => {
-      const o = DATA.stats.overlays[city + "|" + key];
-      return o ? Object.assign({key}, o) : null;
-    })).filter(Boolean);
+    // vector change patches: reference (observed truth) renders first in
+    // grey, then the detected classes; every patch is hoverable
+    const refKeys = (scene.reference || []).map(k => ({key: city+"|"+k, ref:true,  cls:k.split("|")[1]}));
+    const layKeys = (scene.layers    || []).map(k => ({key: city+"|"+k, ref:false, cls:k.split("|")[1]}));
+    const wanted = refKeys.concat(layKeys);
+    const token = ++overlayToken;
 
-    gOverlay.selectAll("image").data(items, d => d.key).join(
-      enter => enter.append("image").attr("opacity", 0),
-      update => update,
-      exit => exit.transition().duration(400).attr("opacity", 0).remove())
-      .attr("href", d => d.file)
-      .attr("preserveAspectRatio","none")
-      .style("filter", d => d.ref ? "grayscale(1) brightness(.55)" : null)
-      .each(function(d){
-        const tl = projection(d.bounds[0]), br = projection(d.bounds[1]);
-        d3.select(this).attr("x", tl[0]).attr("y", tl[1])
-          .attr("width", br[0]-tl[0]).attr("height", br[1]-tl[1]);
-      })
-      .call(sel => {
-        sel.interrupt();
-        // detected pixels settle last, once the city underneath is whole
-        const cap = d => d.ref ? .55 : 1;
-        if(assemble){
-          sel.attr("opacity",0).attr("transform","translate(0,-14) scale(1.02)")
-            .transition().delay(880).duration(700).ease(d3.easeCubicOut)
-            .attr("opacity",cap).attr("transform",HOME);
-        } else {
-          sel.attr("transform",null)
-            .transition().duration(520).attr("opacity",cap);
-        }
-      });
+    loadVectors(wanted.map(w => w.key)).then(fcs => {
+      if(token !== overlayToken) return;   // a newer scene took over
+      const feats = [];
+      wanted.forEach((w,j) => (fcs[j] && fcs[j].features || []).forEach(f =>
+        feats.push({f, cls:w.cls, ref:w.ref})));
+
+      const sel = gOverlay.selectAll("path").data(feats).join("path")
+        .attr("d", d => path(d.f))
+        .attr("fill", d => d.ref ? "#6f6f6f" : C.cls[d.cls])
+        .attr("fill-opacity", d => d.ref ? .5 : .88)
+        .attr("stroke", C.ink).attr("stroke-width", .5)
+        .call(hoverable)
+        .on("mousemove", (e,d) => {
+          const p = d.f.properties || {};
+          tipShow(e, tipRows((d.ref ? "OBSERVED " : "DETECTED ") + d.cls.toUpperCase(), [
+            ["AREA", p.area_km2 != null ? d3.format(".4f")(p.area_km2)+" km²" : "—"],
+            ["≈ PIXELS", p.area_km2 != null ? d3.format(",.0f")(p.area_km2/0.0009) : "—"],
+            ["CITY", p.city || city]]));
+        });
+
+      sel.interrupt();
+      if(assemble){
+        // patches are the last pieces home: each flies in from outside
+        sel.attr("opacity",0)
+          .attr("transform",(d,i)=>{ const c = path.centroid(d.f);
+            return isFinite(c[0]) ? scatterFrom(c[0],c[1],i,140) : null; })
+          .transition().delay((d,i)=>{ const c = path.centroid(d.f);
+            return (isFinite(c[0]) ? radialDelay(c[0],c[1],700,320) : 700) + (d.ref?0:120); })
+          .duration(ASSEMBLE).ease(d3.easeCubicOut)
+          .attr("transform", HOME).attr("opacity", d => d.ref ? .9 : 1);
+      } else {
+        sel.attr("transform",null).attr("opacity",0)
+          .transition().delay((d,i)=>(i%17)*10).duration(480)
+          .attr("opacity", d => d.ref ? .9 : 1);
+      }
+    });
   }
 
   // the city edge draws itself closed, sealing the reconstruction
@@ -700,10 +752,18 @@ INFOGRAPHIC.method = function(){
     .attr("orient","auto-start-reverse").append("path")
     .attr("d","M0,0 L10,5 L0,10 z").attr("fill",C.ink);
 
-  reveal(pair(cx - W*0.20, C.ramp[1], C.ramp[3], C.cls["new development"],
-              "NEW DEVELOPMENT", "open land → built  (sprawl)"), 200);
-  reveal(pair(cx + W*0.20, C.ramp[4], C.ramp[2], C.cls.decay,
-              "DECAY", "built land → dimmed  (blight)"), 380);
+  const p1 = pair(cx - W*0.20, C.ramp[1], C.ramp[3], C.cls["new development"],
+              "NEW DEVELOPMENT", "open land → built  (sprawl)");
+  hoverable(p1).on("mousemove", e=>tipShow(e, tipRows("NEW DEVELOPMENT", [
+    ["NLCD RULE","rank 0 → ≥ 1"], ["PERSISTENCE","median of 3 years"],
+    ["DETECTED, 3 CITIES","1.17 km²"]])));
+  reveal(p1, 200);
+  const p2 = pair(cx + W*0.20, C.ramp[4], C.ramp[2], C.cls.decay,
+              "DECAY", "built land → dimmed  (blight)");
+  hoverable(p2).on("mousemove", e=>tipShow(e, tipRows("DECAY", [
+    ["NLCD RULE","late rank < early rank"], ["PERSISTENCE","median of 3 years"],
+    ["DETECTED, 3 CITIES","30.85 km²"]])));
+  reveal(p2, 380);
 
   // ---- B. the pipeline ----
   const midY = H*0.46;
@@ -713,9 +773,15 @@ INFOGRAPHIC.method = function(){
 
   const boxW = Math.min(150, W*0.24), boxH = 52, y2 = midY+16;
   const steps = [
-    {t:"LANDSAT", s:"2015 & 2025 · 18 channels", fill:C.white},
-    {t:"U-NET", s:"3 levels · 40 epochs", fill:C.sand},
-    {t:"3 CLASSES", s:"no change / new dev / decay", fill:C.white}
+    {t:"LANDSAT", s:"2015 & 2025 · 18 channels", fill:C.white,
+     tip:[["BANDS","7 optical + thermal"],["INDICES","NDVI + NDBI"],
+          ["COMPOSITE","summer median"],["RESOLUTION","30 m"]]},
+    {t:"U-NET", s:"3 levels · 40 epochs", fill:C.sand,
+     tip:[["ENCODER","32 / 64 / 128"],["LOSS","weighted CE + Tversky"],
+          ["PATCHES","128 px, stride 64"],["HOLDOUT","256 px checkerboard"]]},
+    {t:"3 CLASSES", s:"no change / new dev / decay", fill:C.white,
+     tip:[["0","no change"],["1","new development"],["2","decay"],
+          ["PER PIXEL","every 30 m cell"]]}
   ];
   const totalW = boxW*3 + Math.min(70,W*0.09)*2;
   let bx = cx - totalW/2;
@@ -728,6 +794,7 @@ INFOGRAPHIC.method = function(){
       .style("font-size","13px").text(st.t);
     grp.append("text").attr("x",bx+boxW/2).attr("y",y2+40).attr("text-anchor","middle")
       .style("font-size","10px").attr("fill",C.mute).attr("font-family",HELV).text(st.s);
+    hoverable(grp).on("mousemove", e=>tipShow(e, tipRows(st.t, st.tip)));
     reveal(grp, 700 + i*180);
     if(i<2){
       const gapW = (totalW - boxW*3)/2;
@@ -752,8 +819,12 @@ INFOGRAPHIC.method = function(){
 
   const chipW = Math.min(160, W*0.26), chipH = 46, y3 = botY+12;
   const chips = [
-    {t:"311 CALLS", s:"298,608 vacancy reports", fill:C.detroit},
-    {t:"DEMOLITION PERMITS", s:"11,209 buildings removed", fill:C.atlanta}
+    {t:"311 CALLS", s:"298,608 vacancy reports", fill:C.detroit,
+     tip:[["RECORDS","298,608"],["YEARS","2015–2025"],
+          ["NAMING","vacancy · abandonment · danger"],["vs DETECTED","ρ −0.269"]]},
+    {t:"DEMOLITION PERMITS", s:"11,209 buildings removed", fill:C.atlanta,
+     tip:[["RECORDS","11,209"],["YEARS","2015–2025"],
+          ["CLOSEST TO","physical demolition"],["vs DETECTED","ρ −0.151"]]}
   ];
   const cw = chipW*2 + Math.min(48,W*0.06);
   let cxx = cx - cw/2;
@@ -766,6 +837,7 @@ INFOGRAPHIC.method = function(){
       .style("font-size","12px").text(ch.t);
     grp.append("text").attr("x",cxx+chipW/2).attr("y",y3+37).attr("text-anchor","middle")
       .style("font-size","10px").attr("fill",C.mute).attr("font-family",HELV).text(ch.s);
+    hoverable(grp).on("mousemove", e=>tipShow(e, tipRows(ch.t, ch.tip)));
     reveal(grp, 1500 + i*180);
     cxx += chipW + Math.min(48,W*0.06);
   });
@@ -792,6 +864,10 @@ INFOGRAPHIC.pixel = function(){
   pixel.append("rect").attr("x",x0).attr("y",y0).attr("width",px).attr("height",px)
     .attr("fill",C.sand).attr("fill-opacity",.35)
     .attr("stroke",C.ink).attr("stroke-width",3);
+  hoverable(pixel).on("mousemove", e=>tipShow(e, tipRows("ONE LANDSAT PIXEL", [
+    ["GROUND SIZE","30 × 30 m = 900 m²"],
+    ["CHANNELS","18 per pixel pair"],
+    ["SMALLEST UNIT","the model cannot see inside"]])));
   reveal(pixel, 120);
 
   // rowhouse strip: ~7 houses of 4.5 m across a 30 m frontage occupy one edge
@@ -805,7 +881,12 @@ INFOGRAPHIC.pixel = function(){
       .attr("width",hw).attr("height",hh)
       .attr("fill",C.umber).attr("stroke",C.ink).attr("stroke-width",1.6));
   }
-  houses.forEach((h,i)=>reveal(h, 300+i*90));
+  houses.forEach((h,i)=>{
+    hoverable(h).on("mousemove", e=>tipShow(e, tipRows("ONE ROWHOUSE", [
+      ["FRONTAGE","≈ 4.5 m"],["FOOTPRINT","≈ 50 m²"],
+      ["SHARE OF PIXEL","≈ 6%"],["IF DEMOLISHED","pixel label unchanged"]])));
+    reveal(h, 300+i*90);
+  });
   g.append("text").attr("x",x0+px*0.04).attr("y",rowY-10)
     .style("font-size","11px").attr("fill",C.mute).attr("font-family",HELV)
     .call(s=>reveal(s,320)).text("a rowhouse is 4–5 m wide — a tenth of the pixel");
@@ -881,6 +962,16 @@ const CHARTS = {
         .attr("text-anchor","end").attr("fill",C.city[city]).attr("opacity",0)
         .text(city.toUpperCase())
         .transition().delay(gi*260+1500).duration(400).attr("opacity",1);
+      // hoverable per-year markers, revealed after the line finishes drawing
+      g.selectAll(null).data(vals).join("circle")
+        .attr("cx",d=>x(d.year)).attr("cy",d=>y(d.intensity_change))
+        .attr("fill",C.city[city]).attr("stroke",C.ink).attr("stroke-width",1.2).attr("r",0)
+        .call(hoverable)
+        .on("mousemove",(e,d)=>tipShow(e, tipRows(d.city.toUpperCase()+" · "+d.year, [
+          ["Δ INTENSITY", d3.format("+.4f")(d.intensity_change)],
+          ["DEVELOPED", d3.format(",.1f")(d.developed_km2)+" km²"],
+          ["MEAN CLASS", d3.format(".3f")(d.mean_intensity)]])))
+        .transition().delay(gi*260+1400).duration(300).attr("r",3.2);
     });
   },
 
@@ -902,13 +993,19 @@ const CHARTS = {
       // city label
       g.append("text").attr("class","label").attr("x",-14).attr("y",yc+4)
         .attr("text-anchor","end").style("font-size","13px").text(d.city.toUpperCase());
+      const cityTip = (e,cls,v) => tipShow(e, tipRows(d.city.toUpperCase()+" · "+cls.toUpperCase(), [
+        ["AREA", d3.format(".2f")(v)+" km²"],
+        ["≈ PIXELS", d3.format(",.0f")(v/0.0009)],
+        ["DECAY : NEW DEV", d3.format(".1f")(dc/nd)+" : 1"]]));
       // new-dev dot
       g.append("circle").attr("cx",x(nd)).attr("cy",yc).attr("r",0)
         .attr("fill",C.cls["new development"]).attr("stroke",C.ink).attr("stroke-width",2)
+        .call(hoverable).on("mousemove", e=>cityTip(e,"new development",nd))
         .transition().delay(i*140).duration(420).ease(d3.easeBackOut).attr("r",7);
       // decay dot
       g.append("circle").attr("cx",x(nd)).attr("cy",yc).attr("r",7)
         .attr("fill",C.cls.decay).attr("stroke",C.ink).attr("stroke-width",2)
+        .call(hoverable).on("mousemove", e=>cityTip(e,"decay",dc))
         .transition().delay(i*140).duration(750).ease(d3.easeCubicOut).attr("cx",x(dc))
         .transition().duration(300).attr("r",9);
       // value labels
@@ -942,6 +1039,11 @@ const CHARTS = {
       vals.forEach((d,j) => {
         g.append("circle").attr("cx",x(d.ap_decay)).attr("cy",yc).attr("r",0)
           .attr("fill",fill[d.model]).attr("stroke",C.ink).attr("stroke-width",2)
+          .call(hoverable)
+          .on("mousemove", e=>tipShow(e, tipRows(d.city.toUpperCase()+" · "+d.model.toUpperCase(), [
+            ["AP, DECAY", d3.format(".4f")(d.ap_decay)],
+            ["F1, DECAY", d.f1_decay != null ? d3.format(".3f")(d.f1_decay) : "—"],
+            ["EVALUATION", d.kind || "—"]])))
           .transition().delay(i*150+120+j*90).duration(420).ease(d3.easeBackOut).attr("r",7);
       });
       g.append("text").attr("class","label").attr("x",x(hi)+16).attr("y",yc+4)
@@ -976,6 +1078,21 @@ const CHARTS = {
         .attr("text-anchor","end").style("font-size","11px").attr("fill",C.city[c.city])
         .attr("opacity",0).text(c.city.toUpperCase()+"  AP "+d3.format(".3f")(m.ap_decay))
         .transition().delay(i*220+700).duration(400).attr("opacity",1);
+      // invisible fat stroke over the curve: hover anywhere on it for details
+      g.append("path").datum(c.points).attr("fill","none")
+        .attr("stroke","transparent").attr("stroke-width",14)
+        .attr("d", d3.line().x(d=>x(d[0])).y(d=>y(d[1])))
+        .call(hoverable)
+        .on("mousemove", e => {
+          const [mx] = d3.pointer(e, g.node());
+          const r = Math.max(0, Math.min(1, x.invert(mx)));
+          const pt = c.points.reduce((a,b)=>Math.abs(b[0]-r)<Math.abs(a[0]-r)?b:a);
+          tipShow(e, tipRows(c.city.toUpperCase()+" · DECAY", [
+            ["RECALL", d3.format(".3f")(pt[0])],
+            ["PRECISION", d3.format(".3f")(pt[1])],
+            ["PREVALENCE", d3.format(".4f")(c.prevalence)],
+            ["AP", d3.format(".3f")(m.ap_decay)]]));
+        });
     });
   },
 
@@ -1000,6 +1117,11 @@ const CHARTS = {
       .attr("cx", d=>x(xv(d))).attr("cy", y(0))
       .attr("r",3.6).attr("fill",d=>col(xv(d))).attr("fill-opacity",.72)
       .attr("stroke",C.ink).attr("stroke-width",.5).attr("opacity",0)
+      .call(hoverable)
+      .on("mousemove",(e,d)=>tipShow(e, tipRows("TRACT "+d.GEOID, [
+        ["DETECTED DECAY", d3.format(".3f")(xv(d))+" /km²"],
+        ["311 VACANCY", d3.format(",.1f")(yv(d))+" /km²"],
+        ["DEMOLITION", d3.format(",.1f")(+d["demolition permits density"])+" /km²"]])))
       .transition().delay((d,i)=>rank.get(i)*1.4).duration(600).ease(d3.easeCubicOut)
       .attr("cy", d=>y(yv(d))).attr("opacity",1);
 
@@ -1047,6 +1169,12 @@ const CHARTS = {
       });
       vals.forEach(d=> g.append("circle").attr("cx",x(d.cell_m)).attr("cy",y(d.spearman))
         .attr("r",0).attr("fill",tone[record]||C.ink).attr("stroke",C.ink).attr("stroke-width",1.4)
+        .call(hoverable)
+        .on("mousemove", e=>tipShow(e, tipRows(record.toUpperCase()+" · "+d.cell_m+" m", [
+          ["SPEARMAN", d3.format("+.3f")(d.spearman)],
+          ["PARTIAL", d3.format("+.3f")(d.partial_spearman)],
+          ["CELLS", d3.format(",")(d.n_cells)],
+          ["P-VALUE", d.p < 1e-4 ? "< 0.0001" : d3.format(".4f")(d.p)]])))
         .transition().delay(gi*180+900).duration(300).ease(d3.easeBackOut).attr("r",4));
       const last = vals[vals.length-1];
       g.append("text").attr("class","label").attr("x", x(last.cell_m)-10)
