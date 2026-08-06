@@ -20,7 +20,7 @@ body{background:var(--paper);color:var(--ink);
 
 /* tile basemap: warmed and multiplied into the paper so it reads as a print.
    Tiles and furniture must never intercept the pointer, or tract hover dies. */
-#basemap,#labels,#overlay,#bounds{pointer-events:none}
+#basemap,#roads,#labels,#overlay,#bounds{pointer-events:none}
 #basemap{mix-blend-mode:multiply}
 #basemap image{filter:sepia(.30) saturate(.72) brightness(1.05) contrast(.94)}
 #labels image{filter:sepia(.12) brightness(.92) contrast(1.05);opacity:.92}
@@ -241,12 +241,13 @@ const SCENES = [
 
 const svg = d3.select("#canvas");
 const gBasemap = svg.append("g").attr("id","basemap"),
+      gRoads   = svg.append("g").attr("id","roads"),
       gTracts  = svg.append("g"),
       gOverlay = svg.append("g").attr("id","overlay"),
       gLabels  = svg.append("g").attr("id","labels"),
       gBounds  = svg.append("g").attr("id","bounds"),
       gChart   = svg.append("g").attr("class","chart");
-const MAP_LAYERS = [gBasemap,gTracts,gOverlay,gLabels,gBounds];
+const MAP_LAYERS = [gBasemap,gRoads,gTracts,gOverlay,gLabels,gBounds];
 let W = 0, H = 0, DATA = {}, current = null, view = null;
 
 function size(){
@@ -261,10 +262,11 @@ const stageEl = document.getElementById("stage");
 
 Promise.all([
   d3.json("data/boundaries.geojson"),
+  d3.json("data/roads.geojson"),
   d3.json("data/tracts.geojson"),
   d3.json("data/stats.json")
-]).then(([bounds, tracts, stats]) => {
-  DATA = {bounds, tracts, stats};
+]).then(([bounds, roads, tracts, stats]) => {
+  DATA = {bounds, roads, tracts, stats};
   DATA.tractById = new Map(stats.tracts.map(d => [String(d.GEOID), d]));
   size();
   buildSteps();
@@ -375,8 +377,29 @@ function render(scene, animate){
   else readoutCity(city);
 }
 
+/* TIGER street network, drawn over the tiles. The basemap carries roads too,
+   but the sepia filter mutes them; this puts the network back in ink, with
+   arterials weighted so the city's structure reads at a glance. */
+const ROAD_STYLE = {
+  S1100:{w:1.5, o:.55},   // interstates and primary
+  S1200:{w:0.9, o:.42},   // secondary arterials
+  S1400:{w:0.35,o:.26}    // local streets
+};
+function drawRoads(city, path, faint){
+  const roads = DATA.roads.features.filter(f => f.properties.city === city);
+  gRoads.attr("opacity", faint ? .45 : 1)
+    .selectAll("path").data(roads).join("path")
+    .attr("d", path).attr("fill","none")
+    .attr("stroke", C.ink).attr("stroke-linecap","round")
+    .attr("stroke-width", d => (ROAD_STYLE[d.properties.MTFCC]||ROAD_STYLE.S1400).w)
+    .attr("stroke-opacity", d => (ROAD_STYLE[d.properties.MTFCC]||ROAD_STYLE.S1400).o);
+}
+
 function drawMapVectors(scene, city, projection){
   const path = d3.geoPath(projection);
+
+  // streets sit under the choropleth on tract scenes, over the tiles otherwise
+  drawRoads(city, path, scene.type === "tract");
 
   if(scene.type === "tract"){
     const values = DATA.tracts.features
@@ -452,12 +475,14 @@ function legendFor(scene){
   if(scene.type === "tract"){
     title(scene.layer.toUpperCase());
     ["LOWEST FIFTH","SECOND","THIRD","FOURTH","HIGHEST FIFTH"].forEach((t,i)=>swatchRow(C.ramp[i],t));
+    ruleRow(C.ink,"STREET NETWORK");
   } else if(scene.type === "map"){
     title("DETECTED CLASS");
     (scene.layers||[]).forEach(key => {
       const cls = key.split("|")[1];
       swatchRow(C.cls[cls], cls.toUpperCase());
     });
+    ruleRow(C.ink,"STREET NETWORK");
   } else if(scene.type === "infographic"){
     title("CLASSES");
     swatchRow(C.cls["new development"],"NEW DEVELOPMENT");
