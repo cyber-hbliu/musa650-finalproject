@@ -40,13 +40,15 @@ body{background:var(--paper);color:var(--ink);
   border-top:2px solid var(--umber);vertical-align:middle}
 #legend .rule.dash{border-top-style:dashed}
 
-/* read-out box: hidden, pops out on map hover, anchored bottom-right of the map */
-#readout{position:fixed;bottom:26px;left:calc(60vw - 292px);width:268px;z-index:6;
+/* read-out box: pinned top-left of the map, appears only while hovering.
+   Every map's hover detail — city totals, tract values, patch areas —
+   lands here; cursor tooltips are reserved for charts and diagrams. */
+#readout{position:fixed;top:24px;left:24px;width:268px;z-index:6;
   background:var(--white);border:2.4px solid var(--ink);padding:13px 15px;
   font-size:11px;line-height:1.7;letter-spacing:.03em;
   box-shadow:7px 7px 0 rgba(56,31,4,.14);
-  opacity:0;transform:translateY(12px) scale(.98);pointer-events:none;
-  transition:opacity .30s ease,transform .30s cubic-bezier(.2,.9,.2,1)}
+  opacity:0;transform:translateY(-10px) scale(.98);pointer-events:none;
+  transition:opacity .25s ease,transform .25s cubic-bezier(.2,.9,.2,1)}
 #readout h4{font-size:12px;margin-bottom:7px;letter-spacing:.05em}
 #readout .hint{font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-weight:400;
   font-style:italic;color:var(--mute)}
@@ -54,6 +56,13 @@ body{background:var(--paper);color:var(--ink);
   font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-weight:700}
 #readout .row span:last-child{color:var(--umber);font-variant-numeric:tabular-nums}
 #stage:hover ~ #readout.enabled{opacity:1;transform:translateY(0) scale(1)}
+
+/* how-to chip for the live basemap */
+#hint{position:fixed;bottom:26px;left:calc(60vw - 292px);width:268px;z-index:5;
+  display:none;font-size:9.5px;letter-spacing:.09em;color:var(--mute);
+  background:rgba(250,250,248,.9);border:1px solid rgba(56,31,4,.12);
+  padding:7px 10px;line-height:1.7;text-align:right}
+#hint.on{display:block}
 
 /* cursor tooltip: follows the pointer over patches, chart marks and diagrams */
 #tip{position:fixed;z-index:9;background:var(--white);border:2px solid var(--ink);
@@ -95,7 +104,7 @@ body{background:var(--paper);color:var(--ink);
   #stage{position:relative;width:100vw;height:60vh}
   #story{margin-left:0;width:100vw;padding:0 7vw}
   #masthead h1{font-size:32px}
-  #readout{left:auto;right:14px;bottom:14px;width:196px}
+  #readout{left:14px;top:14px;width:196px}
   #stage ~ #readout.enabled{opacity:1;transform:none}
 }
 </style>
@@ -105,6 +114,7 @@ body{background:var(--paper);color:var(--ink);
 <div id="stage"><svg id="canvas"></svg></div>
 <div id="legend"></div>
 <div id="readout"><div id="readout-body"></div></div>
+<div id="hint">DRAG TO PAN &nbsp;·&nbsp; CTRL/&#8984; + SCROLL OR DOUBLE-CLICK TO ZOOM</div>
 <div id="tip"></div>
 
 <div id="story">
@@ -126,7 +136,7 @@ body{background:var(--paper);color:var(--ink);
 </div>
 
 <script>
-const C = {paper:"#f1f2e0", ink:"#381f04", mute:"#5a544c", white:"#ffffff",
+const C = {paper:"#fafaf8", ink:"#381f04", mute:"#5a544c", white:"#ffffff",
            sand:"#dfd78b", gold:"#dfad10", lime:"#bad012", umber:"#68542d",
            furniture:"#c9c4ab",
            city:{Philadelphia:"#c9a227", Detroit:"#7f9a8c", Atlanta:"#5fa6ad"},
@@ -402,6 +412,7 @@ function render(scene){
   gChart.style("display", isFlat ? null : "none");
   MAP_LAYERS.forEach(g => g.style("display", isFlat ? "none" : null));
   d3.select("#readout").classed("enabled", !isFlat);
+  d3.select("#hint").classed("on", !isFlat);
 
   // chrome updates first, so it can never be left stale by a draw error
   legendFor(scene);
@@ -493,14 +504,9 @@ function drawMapVectors(scene, city, projection){
       .attr("fill-opacity", d => d.ref ? .5 : .88)
       .attr("stroke", C.ink).attr("stroke-width", .5)
       .attr("transform",null)
-      .call(hoverable)
-      .on("mousemove", (e,d) => {
-        const p = d.f.properties || {};
-        tipShow(e, tipRows((d.ref ? "OBSERVED " : "DETECTED ") + d.cls.toUpperCase(), [
-          ["AREA", p.area_km2 != null ? d3.format(".4f")(p.area_km2)+" km²" : "—"],
-          ["≈ PIXELS", p.area_km2 != null ? d3.format(",.0f")(p.area_km2/0.0009) : "—"],
-          ["CITY", p.city || city]]));
-      })
+      .style("cursor","crosshair")
+      .on("mousemove", (e,d) => readoutPatch(d, city))
+      .on("mouseleave", () => readoutCity(city))
       .attr("opacity",0)
       .transition().delay((d,i)=>Math.min(i*1.5, 160)).duration(240)
       .attr("opacity", d => d.ref ? .9 : 1);
@@ -589,6 +595,16 @@ function readoutTract(geoid){
       '<div class="row"><span>' + k.replace(" density","").toUpperCase() +
       '</span><span>' + d3.format(",.1f")(+row[k]) + '</span></div>'));
   d3.select("#readout-body").html(html.join(""));
+}
+function readoutPatch(d, city){
+  const p = d.f.properties || {};
+  const rows = [
+    ["AREA", p.area_km2 != null ? d3.format(".4f")(p.area_km2)+" km²" : "—"],
+    ["≈ PIXELS", p.area_km2 != null ? d3.format(",.0f")(p.area_km2/0.0009) : "—"],
+    ["CITY", p.city || city]];
+  d3.select("#readout-body").html(
+    '<h4>' + (d.ref ? "OBSERVED " : "DETECTED ") + d.cls.toUpperCase() + '</h4>' +
+    rows.map(r => '<div class="row"><span>'+r[0]+'</span><span>'+r[1]+'</span></div>').join(""));
 }
 function readoutCity(city){
   const r = DATA.stats.regime.find(d => d.city === city);
