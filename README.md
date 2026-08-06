@@ -18,13 +18,13 @@ The work ran as a design loop rather than a straight pipeline. Each stage fed th
 
 ```mermaid
 flowchart TD
-    A["Start from a public use case<br/>city agencies target blight with biased,<br/>lagged administrative records"]
-    B["Build on open data only<br/>Landsat, NLCD, TIGER, ACS,<br/>Philadelphia open data endpoints,<br/>one reproducible pipeline"]
-    C["Prototype a spatial ML solution<br/>3-level U-Net on land cover<br/>trajectories, 18 channels"]
-    D["Ask whether it generalizes<br/>spatial holdout in Philadelphia,<br/>frozen transfer to Detroit and Atlanta,<br/>spectral nulls, normalisation ablation"]
-    E["Ground it in civic records<br/>311, permits, vacant buildings,<br/>six scales, built-area control"]
-    F["Weigh the policy consequence<br/>a blind instrument would misdirect<br/>reinvestment, so say it is blind"]
-    G["Deliver a data product<br/>15-scene d3 narrative anyone<br/>can read, no methods degree required"]
+    A["Start from a public use case"]
+    B["Build on open data only<br/>Landsat, NLCD, TIGER, ACS,Philadelphia open data"]
+    C["Prototype a spatial ML solution<br/>3-level U-Net on land cover, trajectories, 18 channels"]
+    D["Ask whether it generalizes<br/>spatial holdout in Philadelphia, Detroit and Atlanta,<br/>spectral nulls, normalisation ablation"]
+    E["Ground it in civic records: 311, permits, vacant buildings"]
+    F["Weigh the policy consequence"]
+    G["Deliver a data product<br/>15-scene d3 narrative anyone<br/>can read"]
     A --> B --> C --> D --> E --> F --> G
     F -.->|question survives, framing does not| A
     G -.->|raster overlays too coarse| C
