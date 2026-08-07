@@ -1,4 +1,4 @@
-# Detecting urban decay and new development from Landsat in Philadelphia, Detroit and Atlanta, 2015 to 2025
+# Detecting urban decay and sprawl from Landsat in Philadelphia, Detroit and Atlanta, 2015 to 2025
 
 I wanted to know whether a convolutional network trained on Landsat imagery could identify where a city is coming apart. Blight detection from satellites is a standing promise in planning analytics. Cities have limited demolition budgets and land banks with waiting lists, and a citywide map of where decline is accelerating would be useful to them.
 
